@@ -6,6 +6,8 @@ set(SOURCES
   src/tcm_log.c
   src/tcm_msg.c
   src/tcm_udp.c
+  src/tcm_errno.c
+  src/tcm_socket.c
   src/tcm_fabric.c
   src/tcmu.c
 )

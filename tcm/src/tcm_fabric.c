@@ -26,7 +26,7 @@ int tcm_create_mr(  tcm_fabric * fabric, size_t size, size_t alignment,
         return ret;
     }
 
-    tcm__log_trace( "Created memory region %p, size %lu, alignment %lu", 
+    tcm__log_debug( "Created memory region %p, size %lu, alignment %lu", 
                     mem, size, alignment);
     return 0;
 
@@ -252,7 +252,7 @@ ssize_t tcm_send_fabric(tcm_fabric * fabric, void * buf, size_t len,
     if (ret < 0)
         return ret;
 
-    while (!tcm_check_deadline(&dl))    
+    do
     {
         ret = fi_send(fabric->ep, buf, len, fi_mr_desc(mr), peer, ctx);
         if (ret == -FI_EAGAIN || ret == -FI_EWOULDBLOCK)
@@ -269,7 +269,8 @@ ssize_t tcm_send_fabric(tcm_fabric * fabric, void * buf, size_t len,
             tcm__log_error("Fabric send failed: %s", fi_strerror(-ret));
             return ret;
         }
-    }
+    } while (!tcm_check_deadline(&dl));
+
 
     tcm__log_error("Fabric send failed: Timed out");
     return -ETIMEDOUT;
@@ -285,7 +286,7 @@ ssize_t tcm_recv_fabric(tcm_fabric * fabric, void * buf, size_t len,
     if (ret < 0)
         return ret;
 
-    while (!tcm_check_deadline(&dl))    
+    do
     {
         ret = fi_recv(fabric->ep, buf, len, fi_mr_desc(mr), peer, ctx);
         if (ret == -FI_EAGAIN || ret == -FI_EWOULDBLOCK)
@@ -302,7 +303,7 @@ ssize_t tcm_recv_fabric(tcm_fabric * fabric, void * buf, size_t len,
             tcm__log_error("Fabric receive failed: %s", fi_strerror(-ret));
             return ret;
         }
-    }
+    } while (!tcm_check_deadline(&dl));
 
     tcm__log_error("Fabric receive failed: Timed out");
     return -ETIMEDOUT;
@@ -319,10 +320,10 @@ ssize_t tcm_write_fabric(tcm_fabric * fabric, void * buf, size_t len,
     if (ret < 0)
         return ret;
 
-    while (!tcm_check_deadline(&dl))    
+    do
     {
         ret = fi_write(fabric->ep, buf, len, fi_mr_desc(mr), peer, rbuf, rkey,
-                       NULL);
+                       ctx);
         if (ret == -FI_EAGAIN || ret == -FI_EWOULDBLOCK)
         {
             tcm_sleep(timing->interval);
@@ -337,7 +338,7 @@ ssize_t tcm_write_fabric(tcm_fabric * fabric, void * buf, size_t len,
             tcm__log_error("Fabric receive failed: %s", fi_strerror(-ret));
             return ret;
         }
-    }
+    } while (!tcm_check_deadline(&dl));
 
     tcm__log_error("Fabric receive failed: Timed out");
     return -ETIMEDOUT;
@@ -354,10 +355,10 @@ ssize_t tcm_read_fabric(tcm_fabric * fabric, void * buf, size_t len,
     if (ret < 0)
         return ret;
 
-    while (!tcm_check_deadline(&dl))    
+    do
     {
         ret = fi_read(fabric->ep, buf, len, fi_mr_desc(mr), peer, rbuf, rkey,
-                      NULL);
+                      ctx);
         if (ret == -FI_EAGAIN || ret == -FI_EWOULDBLOCK)
         {
             tcm_sleep(timing->interval);
@@ -372,7 +373,7 @@ ssize_t tcm_read_fabric(tcm_fabric * fabric, void * buf, size_t len,
             tcm__log_error("Fabric receive failed: %s", fi_strerror(-ret));
             return ret;
         }
-    }
+    } while (!tcm_check_deadline(&dl));
 
     tcm__log_error("Fabric receive failed: Timed out");
     return -ETIMEDOUT;
@@ -412,8 +413,42 @@ ssize_t tcm_exch_fabric(tcm_fabric * fabric,
     return ret;
 }
 
-ssize_t tcm_wait_fabric(  struct fid_cq * cq, tcm_time * timing,
-                                        struct fi_cq_err_entry * err)
+ssize_t tcm_exch_fabric_rev(tcm_fabric * fabric,
+                            void * send_buf, uint64_t send_buf_size, 
+                            struct fid_mr * send_mr,
+                            void * recv_buf, uint64_t recv_buf_size,
+                            struct fid_mr * recv_mr,
+                            fi_addr_t peer, tcm_time * timing,
+                            struct fi_cq_err_entry * err)
+{
+    ssize_t ret;
+    tcm_time timer;
+    timer.interval  = timing->interval;
+    timer.delta     = 0;
+    ret = tcm_conv_time(timing, &timer.ts);
+    if (ret < 0)
+        return ret;
+
+    ret = tcm_recv_fabric(fabric, recv_buf, recv_buf_size, recv_mr, peer, NULL, 
+                          &timer);
+    if (ret < 0)
+        return ret;
+
+    ret = tcm_wait_fabric(fabric->rx_cq, &timer, err);
+    if (ret < 0)
+        return ret;
+
+    ret = tcm_send_fabric(fabric, send_buf, send_buf_size, send_mr, peer, NULL, 
+                          &timer);
+    if (ret < 0)
+        return ret;
+
+    ret = tcm_wait_fabric(fabric->tx_cq, &timer, err);
+    return ret;
+}
+
+ssize_t tcm_wait_fabric(struct fid_cq * cq, tcm_time * timing,
+                        struct fi_cq_err_entry * err)
 {
     ssize_t ret;
     struct timespec dl;
@@ -423,7 +458,7 @@ ssize_t tcm_wait_fabric(  struct fid_cq * cq, tcm_time * timing,
         return ret;
     }
 
-    while (!tcm_check_deadline(&dl))    
+    do
     {
         ret = fi_cq_read(cq, err, 1);
         if (ret == 0 || ret == -FI_EAGAIN || ret == -FI_EWOULDBLOCK)
@@ -433,7 +468,7 @@ ssize_t tcm_wait_fabric(  struct fid_cq * cq, tcm_time * timing,
         }
         else if (ret == 1)
         {
-            return 0;
+            return 1;
         }
         else if (ret == -FI_EAVAIL)
         {
@@ -444,12 +479,30 @@ ssize_t tcm_wait_fabric(  struct fid_cq * cq, tcm_time * timing,
                 tcm__log_error("Could not determine error details");
                 return ret;
             }
+            return -err->err;
         }
         else
         {
             tcm__log_error("Error reading CQ: %s", fi_strerror(tcm_abs(ret)));
             return ret;
         }
-    }
+    } while (!tcm_check_deadline(&dl));
     return -ETIMEDOUT;
+}
+
+/* Send one byte of meaningless data to keep the connection state active */
+ssize_t tcm_send_dummy_message(tcm_fabric * fabric, fi_addr_t peer, 
+                               tcm_time * timing)
+{
+    ssize_t ret;
+    /* Make sure we don't leak some old data there */
+    ((uint8_t *) fabric->mr_info.ptr)[0] = 0;
+    ret = tcm_send_fabric(fabric, fabric->mr_info.ptr, 1, fabric->mr, peer, 
+                          NULL, timing);
+    if (ret < 0)
+        return ret;
+    
+    struct fi_cq_err_entry err;
+    ret = tcm_wait_fabric(fabric->tx_cq, timing, &err);
+    return ret;
 }

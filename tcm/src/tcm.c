@@ -94,61 +94,6 @@ void tcm_destroy_server(tcm_server * server)
     close(server->sock);
 }
 
-int tcm_set_sock_mode(tcm_sock sock, tcm_sock_mode mode)
-{
-    if (!sock)
-        return -EINVAL;
-
-
-    int flags = fcntl(sock, F_GETFL, 0);
-        if (flags < 0)
-            return -errno;
-
-    switch (mode)
-    {
-        case TCM_SOCK_MODE_SYNC:
-            flags = flags & ~O_NONBLOCK;
-            break;
-        case TCM_SOCK_MODE_ASYNC:
-            flags = flags | O_NONBLOCK;
-            break;
-        default:
-            return -EINVAL;
-    }
-
-    return 0;
-}
-
-int tcm_setup_udp(struct sockaddr * sa, tcm_sock_mode mode, tcm_sock * sock_out)
-{
-    int sa_size = tcm__get_sa_size(sa);
-    if (sa_size < 0)
-    {
-        return sa_size;
-    }
-
-    tcm_sock sock = socket(sa->sa_family, 
-                           SOCK_DGRAM | 
-                           (mode == TCM_SOCK_MODE_ASYNC ? SOCK_NONBLOCK : 0),
-                           0);
-    if (!tcm_sock_valid(sock))
-    {
-        tcm__log_error("UDP socket creation failed: %s", strerror(tcm_sock_err));
-        return -tcm_sock_err;
-    }
-
-    int ret = bind(sock, sa, sa_size);
-    if (ret < 0)
-    {
-        tcm__log_error("Socket bind failed: %s", strerror(tcm_sock_err));
-        close(sock);
-        return -tcm_sock_err;
-    }
-
-    * sock_out = sock;
-    return 0;
-}
-
 int tcm__node_service_to_sa(const char * node, const char * service, struct
                             sockaddr_storage * addr_out)
 {
@@ -319,7 +264,6 @@ int tcm_create_client(tcm_client_opts * opts, tcm_client ** client_out)
 
     tcm_msg_metadata_req req;
     req.common.id = TCM_MSG_METADATA_REQ;
-    req.pad = 0;
     tcm_msg_init(&req, token++);
 
     tcm_msg_metadata_resp meta;
@@ -341,10 +285,10 @@ int tcm_create_client(tcm_client_opts * opts, tcm_client ** client_out)
         tcm__log_error("Response message garbled");
         goto err_socket;
     }
-    if (ret - meta.addr_len != 24)
+    if (ret - meta.addr_len != sizeof(meta))
     {
         tcm__log_error( "Server address invalid: msg bytes: %d, expected: %d",
-                        ret, meta.addr_len + 24);
+                        ret, meta.addr_len + sizeof(meta));
         goto err_socket;
     }
     if (meta.addr_fmt != TCM_AF_INET || meta.addr_len != sizeof(tcm_addr_inet))

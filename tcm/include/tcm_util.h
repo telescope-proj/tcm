@@ -25,4 +25,14 @@ static inline void tcm_mem_free(void * ptr)
     free(ptr); // todo windows has a different implementation for aligned mem
 }
 
+static inline size_t tcm_get_page_size() {
+    #if defined(_WIN32)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        return si.dwPageSize;
+    #else
+        return sysconf(_SC_PAGESIZE);
+    #endif
+}
+
 #endif

@@ -1,11 +1,12 @@
 #ifndef _TCM_FABRIC_H_
 #define _TCM_FABRIC_H_
 
-#include <rdma/fabric.h>
-#include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
-#include <rdma/fi_cm.h>
+#include <rdma/fi_domain.h>
+#include <rdma/fabric.h>
 #include <rdma/fi_rma.h>
+#include <rdma/fi_cm.h>
+#include <rdma/fi_eq.h>
 
 #include "tcm_time.h"
 
@@ -81,5 +82,16 @@ ssize_t tcm_poll_fabric(struct fid_cq * cq,
 
 ssize_t tcm_wait_fabric(struct fid_cq * cq, tcm_time * timing,
                         struct fi_cq_err_entry * err);
+
+ssize_t tcm_send_dummy_message(tcm_fabric * fabric, fi_addr_t peer, 
+                            tcm_time * timing);
+
+ssize_t tcm_exch_fabric_rev(tcm_fabric * fabric,
+                            void * send_buf, uint64_t send_buf_size, 
+                            struct fid_mr * send_mr,
+                            void * recv_buf, uint64_t recv_buf_size,
+                            struct fid_mr * recv_mr,
+                            fi_addr_t peer, tcm_time * timing,
+                            struct fi_cq_err_entry * err);
 
 #endif

@@ -4,7 +4,7 @@
 #include "tcm_util.h"
 
 int tcmu_create_endpoint(struct sockaddr * bind_addr, const char * prov_name, 
-                         uint32_t version, tcm_fabric * out)
+                         uint32_t version, tcm_fabric * out, size_t mbuf_size)
 {
     int ret;
     struct fi_info * hints = fi_allocinfo();
@@ -41,17 +41,19 @@ int tcmu_create_endpoint(struct sockaddr * bind_addr, const char * prov_name,
     if (ret < 0)
         goto cleanup;
 
-    ret = tcm_create_mr(out, 4096, 4096, &out->mr);
-    if (ret < 0)
+    if (mbuf_size)
     {
-        tcm_destroy_fabric(out, 0);
-        tcm__log_error("MR creation failed: %s", fi_strerror(-ret));
-        return ret;
+        ret = tcm_create_mr(out, mbuf_size, tcm_get_page_size(), &out->mr);
+        if (ret < 0)
+        {
+            tcm_destroy_fabric(out, 0);
+            tcm__log_error("MR creation failed: %s", fi_strerror(-ret));
+            return ret;
+        }
+        out->mr_info.ptr        = out->mr->fid.context;
+        out->mr_info.alignment  = tcm_get_page_size();
+        out->mr_info.len        = mbuf_size;
     }
-
-    out->mr_info.ptr        = out->mr->fid.context;
-    out->mr_info.alignment  = 4096;
-    out->mr_info.len        = 4096;
 
 cleanup:
     hints->src_addr = NULL;
@@ -69,8 +71,10 @@ int tcmu_add_peer(tcm_fabric * fabric, struct sockaddr * peer, fi_addr_t * out)
 
     char addr[INET6_ADDRSTRLEN];
     tcm__log_debug("Adding peer to AV: %s:%d", 
-        inet_ntop(AF_INET, &((struct sockaddr_in *) peer)->sin_addr, addr, sas),
-        ntohs(((struct sockaddr_in *) peer)->sin_port));
+        inet_ntop(peer->sa_family,
+                  &((struct sockaddr_in *) peer)->sin_addr, addr, sas),
+        ntohs(((struct sockaddr_in *) peer)->sin_port)
+    );
 
     int retv = 0;
     ret = fi_av_insert(fabric->av, peer, 1, out, FI_SYNC_ERR, &retv);
@@ -78,6 +82,31 @@ int tcmu_add_peer(tcm_fabric * fabric, struct sockaddr * peer, fi_addr_t * out)
         return (retv == 0 ? (ret == 0 ? -FI_EOTHER : ret) : tcm_negabs(retv));
 
     return 0;
+}
+
+int tcmu_remove_peer(tcm_fabric * fabric, fi_addr_t peer)
+{
+    struct sockaddr_storage sa;
+    memset(&sa, 0, sizeof(sa));
+    fi_addr_t tmp_addr = peer;
+    size_t tmp_addrlen = sizeof(sa);
+    int ret;
+    
+    /* Verify this peer actually exists */
+    ret = fi_av_lookup(fabric->av, peer, &sa, &tmp_addrlen);
+    if (ret < 0)
+        return ret;
+
+    char addr[INET6_ADDRSTRLEN];
+    tcm__log_debug("Removing peer (fid: %lu) from AV: %s:%d", 
+        peer,
+        inet_ntop(sa.ss_family, 
+                  &((struct sockaddr_in *) &sa)->sin_family, addr, tmp_addrlen),
+        ntohs(((struct sockaddr_in *) &sa)->sin_port)
+    );
+
+    ret = fi_av_remove(fabric->av, &tmp_addr, 1, FI_SYNC_ERR);
+    return ret;
 }
 
 /*  Call tcmu_add_peer before running! Not to be used on already connected peers! */

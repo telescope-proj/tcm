@@ -7,6 +7,8 @@
 #include "compat/tcmc_net.h"
 
 #include "tcm_fabric.h"
+#include "tcm_udp.h"
+
 #include "tcm_time.h"
 #include "tcm_msg.h"
 
@@ -34,13 +36,6 @@ typedef struct {
     uint32_t            fabric_min_version;
     uint64_t            fabric_flags;
 } tcm_client_opts;
-
-typedef enum {
-    TCM_SOCK_MODE_INVALID,
-    TCM_SOCK_MODE_SYNC,
-    TCM_SOCK_MODE_ASYNC,
-    TCM_SOCK_MODE_MAX
-} tcm_sock_mode;
 
 typedef struct {
     struct sockaddr     * beacon_addr;

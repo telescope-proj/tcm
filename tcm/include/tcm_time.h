@@ -18,6 +18,10 @@ typedef struct {
 
 static inline int tcm_check_deadline(struct timespec * ts)
 {
+    /* Special value for single poll */
+    if (ts->tv_sec == 0 && ts->tv_nsec == 0)
+        return 1;
+    
     struct timespec now;
     int ret = clock_gettime(CLOCK_MONOTONIC, &now);
     if (ret == -1)
