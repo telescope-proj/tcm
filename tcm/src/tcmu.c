@@ -15,18 +15,19 @@ int tcmu_create_endpoint(struct sockaddr * bind_addr, const char * prov_name,
     hints->addr_format = FI_SOCKADDR_IN;
     
     hints->ep_attr->type        = FI_EP_RDM;
-    hints->caps                 = FI_MSG | FI_RMA | FI_REMOTE_READ | FI_REMOTE_WRITE;
+    hints->caps                 = FI_MSG | FI_RMA | FI_TAGGED;
     hints->mode                 = FI_RX_CQ_DATA | FI_LOCAL_MR;
-    // hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
     hints->domain_attr->mr_mode = FI_MR_BASIC;
-    
-    hints->tx_attr->inject_size = 0;
-    hints->tx_attr->iov_limit   = 1;
-    hints->tx_attr->rma_iov_limit = 1;
-    hints->tx_attr->size = 128;
 
-    hints->rx_attr->iov_limit = 1;
+    hints->tx_attr->caps          = FI_TAGGED;
+    hints->tx_attr->size          = 128;
+    hints->tx_attr->iov_limit     = 1;
+    hints->tx_attr->rma_iov_limit = 1;
+    hints->tx_attr->inject_size   = 0;
+
+    hints->rx_attr->caps = FI_TAGGED;
     hints->rx_attr->size = 128;
+    hints->rx_attr->iov_limit = 1;
 
     hints->ep_attr->max_msg_size = 512;
     hints->domain_attr->cq_cnt = 2;

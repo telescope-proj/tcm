@@ -78,6 +78,25 @@ static inline int tcm_sleep(uint64_t ms)
 #endif
 }
 
+static inline int tcm_fsleep(float sec)
+{
+    if (!sec)
+        return 0;
+
+#ifdef _WIN32
+    return -ENOSYS;
+#else
+    struct timespec t;
+    t.tv_sec    = (time_t) sec;
+    t.tv_nsec   = (time_t) ((sec - (float) t.tv_sec) * 1e9);
+    int ret = nanosleep(&t, NULL);
+    if (ret < 0)
+        return -errno;
+        
+    return 0;
+#endif
+}
+
 static inline int tcm_conv_time(tcm_time * tt, struct timespec * ts)
 {
     if (tt->delta)

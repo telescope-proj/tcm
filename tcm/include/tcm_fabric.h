@@ -3,6 +3,7 @@
 
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_domain.h>
+#include <rdma/fi_tagged.h>
 #include <rdma/fabric.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_cm.h>
@@ -37,9 +38,17 @@ typedef struct {
 
 #include "tcm_comm.h"
 
+ssize_t tcm_tsend_fabric(tcm_fabric * fabric, void * buf, size_t len, 
+                         struct fid_mr * mr, fi_addr_t peer, uint64_t tag,
+                         void * ctx, tcm_time * timing);
+
 ssize_t tcm_send_fabric(tcm_fabric * fabric, void * buf, size_t len,
                         struct fid_mr * mr, fi_addr_t peer, void * ctx,
                         tcm_time * timing);
+
+ssize_t tcm_trecv_fabric(tcm_fabric * fabric, void * buf, size_t len, 
+                         struct fid_mr * mr, fi_addr_t peer, uint64_t tag,
+                         uint64_t mask, void * ctx, tcm_time * timing);
 
 ssize_t tcm_recv_fabric(tcm_fabric * fabric, void * buf, size_t len,
                         struct fid_mr * mr, fi_addr_t peer, void * ctx,
