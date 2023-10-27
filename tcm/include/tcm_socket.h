@@ -1,5 +1,9 @@
-#ifndef _TCM_SOCKET_H_
-#define _TCM_SOCKET_H_
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
+
+#ifndef TCM_SOCKET_H_
+#define TCM_SOCKET_H_
 
 #include "compat/tcmc_net.h"
 

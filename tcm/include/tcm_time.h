@@ -1,56 +1,59 @@
-#ifndef _TCM_TIME_H_
-#define _TCM_TIME_H_
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
+
+#ifndef TCM_TIME_H_
+#define TCM_TIME_H_
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+#include <errno.h>
 
 typedef enum {
-    TCM_MODE_CLOCK      = 0,
-    TCM_MODE_DELTA      = 1,
-    TCM_MODE_DEFAULT    = 2,
+    TCM_MODE_CLOCK   = 0,
+    TCM_MODE_DELTA   = 1,
+    TCM_MODE_DEFAULT = 2,
     TCM_MODE_MAX
 } tcm_time_mode;
 
 typedef struct {
-    struct timespec ts;         // Timespec, 0sec/0nsec = one-shot
-    int64_t         interval;   // Polling interval, <0 = blocking operation (tbd)
-    bool            delta;      // 0: Real time (monotonic), 1: Delta
+    struct timespec ts; // Timespec, 0sec/0nsec = one-shot
+    int64_t interval; // Polling interval in usec, <0 = blocking operation
+    bool    delta;    // 0: Real time (monotonic), 1: Delta
 } tcm_time;
 
-static inline int tcm_check_deadline(struct timespec * ts)
-{
+static inline int tcm_check_deadline(struct timespec * ts) {
     /* Special value for single poll */
     if (ts->tv_sec == 0 && ts->tv_nsec == 0)
         return 1;
-    
+
     struct timespec now;
-    int ret = clock_gettime(CLOCK_MONOTONIC, &now);
+    int             ret = clock_gettime(CLOCK_MONOTONIC, &now);
     if (ret == -1)
         return -errno;
-    
-    return ((now.tv_sec > ts->tv_sec && now.tv_nsec > ts->tv_nsec)
-            || (now.tv_sec == ts->tv_sec && now.tv_nsec > ts->tv_nsec));
+
+    return ((now.tv_sec > ts->tv_sec && now.tv_nsec > ts->tv_nsec) ||
+            (now.tv_sec == ts->tv_sec && now.tv_nsec > ts->tv_nsec));
 }
 
-static inline void tcm_get_delay(struct timespec * ts, struct timespec * ts_out, 
-    uint64_t delay_ms)
-{
-    ts_out->tv_sec = ts->tv_sec + (delay_ms / 1000);
+static inline void tcm_get_delay(struct timespec * ts, struct timespec * ts_out,
+                                 uint64_t delay_ms) {
+    ts_out->tv_sec  = ts->tv_sec + (delay_ms / 1000);
     ts_out->tv_nsec = ts->tv_nsec + ((delay_ms % 1000) * 1000000);
-    if (ts_out->tv_nsec > 1000000000)
-    {
+    if (ts_out->tv_nsec > 1000000000) {
         ts_out->tv_sec++;
         ts_out->tv_nsec -= 1000000000;
     }
 }
 
-static inline int tcm_get_deadline(struct timespec * out, int delay_ms)
-{
+static inline int tcm_get_deadline(struct timespec * out, int delay_ms) {
     // this is unnecessary but GCC won't shut up if I don't include it
-    out->tv_sec = 0;
+    out->tv_sec  = 0;
     out->tv_nsec = 0;
 
     struct timespec now;
-    int ret = clock_gettime(CLOCK_MONOTONIC, &now);
+    int             ret = clock_gettime(CLOCK_MONOTONIC, &now);
     if (ret != 0)
         return -errno;
 
@@ -58,8 +61,7 @@ static inline int tcm_get_deadline(struct timespec * out, int delay_ms)
     return ret;
 }
 
-static inline int tcm_sleep(uint64_t ms)
-{
+static inline int tcm_sleep(uint64_t ms) {
     if (!ms)
         return 0;
 
@@ -68,18 +70,38 @@ static inline int tcm_sleep(uint64_t ms)
     return 0;
 #else
     struct timespec t;
-    t.tv_sec    = ms / 1000;
-    t.tv_nsec   = (ms % 1000) * 1000000;
-    int ret = nanosleep(&t, NULL);
+    t.tv_sec  = ms / 1000;
+    t.tv_nsec = (ms % 1000) * 1000000;
+    int ret   = nanosleep(&t, NULL);
     if (ret < 0)
         return -errno;
-        
+
     return 0;
 #endif
 }
 
-static inline int tcm_fsleep(float sec)
-{
+static inline int tcm_usleep(uint64_t us) {
+    if (!us)
+        return 0;
+
+#ifdef _WIN32
+    LARGE_INTEGER i;
+    i.QuadPart = -(dwMilliseconds * 10);
+    NtDelayExecution(false, i);
+    return 0;
+#else
+    struct timespec t;
+    t.tv_sec  = us / 1000000;
+    t.tv_nsec = (us % 1000000) * 1000;
+    int ret   = nanosleep(&t, NULL);
+    if (ret < 0)
+        return -errno;
+
+    return 0;
+#endif
+}
+
+static inline int tcm_fsleep(float sec) {
     if (!sec)
         return 0;
 
@@ -87,36 +109,30 @@ static inline int tcm_fsleep(float sec)
     return -ENOSYS;
 #else
     struct timespec t;
-    t.tv_sec    = (time_t) sec;
-    t.tv_nsec   = (time_t) ((sec - (float) t.tv_sec) * 1e9);
-    int ret = nanosleep(&t, NULL);
+    t.tv_sec  = (time_t) sec;
+    t.tv_nsec = (time_t) ((sec - (float) t.tv_sec) * 1e9);
+    int ret   = nanosleep(&t, NULL);
     if (ret < 0)
         return -errno;
-        
+
     return 0;
 #endif
 }
 
-static inline int tcm_conv_time(tcm_time * tt, struct timespec * ts)
-{
-    if (tt->delta)
-    {
+static inline int tcm_conv_time(tcm_time * tt, struct timespec * ts) {
+    if (tt->delta) {
         struct timespec cur;
-        int ret = clock_gettime(CLOCK_MONOTONIC, &cur);
-        if (ret < 0)
-        {
+        int             ret = clock_gettime(CLOCK_MONOTONIC, &cur);
+        if (ret < 0) {
             return -errno;
         }
         ts->tv_sec  = cur.tv_sec + tt->ts.tv_sec;
         ts->tv_nsec = cur.tv_nsec + tt->ts.tv_nsec;
-        if (ts->tv_nsec > 1000000000)
-        {
+        if (ts->tv_nsec > 1000000000) {
             ts->tv_sec++;
             ts->tv_nsec -= 1000000000;
         }
-    }
-    else
-    {
+    } else {
         ts->tv_sec  = tt->ts.tv_sec;
         ts->tv_nsec = tt->ts.tv_nsec;
     }

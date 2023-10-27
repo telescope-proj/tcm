@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
+
 #include <errno.h>
 
 #include "tcm_socket.h"

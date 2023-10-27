@@ -1,25 +1,27 @@
-cmake_minimum_required(VERSION 3.0.0)
-project(libtcm LANGUAGES C)
+cmake_minimum_required(VERSION 3.9)
+project(libtcm LANGUAGES C CXX)
 
 set(SOURCES
-  src/tcm.c
   src/tcm_log.c
-  src/tcm_msg.c
-  src/tcm_udp.c
-  src/tcm_errno.c
   src/tcm_socket.c
-  src/tcm_fabric.c
-  src/tcmu.c
+  src/tcm_errno.cpp
+  src/tcm_beacon.cpp
+  src/tcm_fabric.cpp
+  src/tcm_fabric_conn.cpp
+  src/tcm_fabric_cq.cpp
+  src/tcm_fabric_peer.cpp
+  src/tcm_fabric_shared.cpp
+  src/tcm_fabric_xfer.cpp
+  src/tcm_mem.cpp
+  src/tcm_mm.cpp
+  src/tcm_msg.cpp
 )
 
 find_library(Libfabric NAMES fabric)
 
 add_compile_options(
   "-Wall"
-  "-Werror"
-  "-Wfatal-errors"
-  "-fdata-sections"
-  "-ffunction-sections"
+  "-Wextra"
   "$<$<CONFIG:DEBUG>:-O0;-g3;-ggdb>"
 )
 

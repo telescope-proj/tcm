@@ -1,38 +1,35 @@
-#ifndef _TCM_UTIL_H_
-#define _TCM_UTIL_H_
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
 
-#include <stdlib.h>
-#include <errno.h>
+#ifndef TCM_UTIL_H_
+#define TCM_UTIL_H_
 
-#define tcm_abs(x)                  (x >= 0 ? x : -x)
-#define tcm_negabs(x)               (x <= 0 ? x : -x)
-#define TCM_MAX_ADDR_LEN            128
+#define tcm_abs(x) (x >= 0 ? x : -x)
+#define tcm_negabs(x) (x <= 0 ? x : -x)
+#define TCM_MAX_ADDR_LEN 128
+#define tcm_free_unset(x) free(x); x = 0;
 
-static inline void * tcm_mem_align(size_t size, size_t alignment)
-{
-    void * memptr = NULL;
-    int ret = posix_memalign(&memptr, alignment, size);
-    if (ret != 0)
-    {
-        errno = tcm_abs(ret);
-        return NULL;
-    }
-    return memptr;
-}
+// int tcm_validate_ipv4_addr(uint32_t addr) {
+//     in_addr_t ranges[] = {
+//         inet_addr("10.0.0.0"),
+//         inet_addr("172.16.0.0"),
+//         inet_addr("192.168.0.0"),
+//         0
+//     };
 
-static inline void tcm_mem_free(void * ptr)
-{
-    free(ptr); // todo windows has a different implementation for aligned mem
-}
+//     in_addr_t masks[] = {
+//         inet_addr("255.0.0.0"),
+//         inet_addr("255.240.0.0"),
+//         inet_addr("255.255.0.0"),
+//         0
+//     };
 
-static inline size_t tcm_get_page_size() {
-    #if defined(_WIN32)
-        SYSTEM_INFO si;
-        GetSystemInfo(&si);
-        return si.dwPageSize;
-    #else
-        return sysconf(_SC_PAGESIZE);
-    #endif
-}
+//     for (int i = 0; masks[i] > 0; i++) {
+//         if (ranges[i] & masks[i] == addr & masks[i])
+//             return 1;
+//     }
+//     return 0;
+// }
 
 #endif
