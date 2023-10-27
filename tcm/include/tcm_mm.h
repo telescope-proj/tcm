@@ -22,6 +22,16 @@
 #define TCM_DEFAULT_HUGEPAGE_SIZE 2097152
 #endif
 
+/* Check if the RDMA subsystem can use hugepages */
+
+static inline int tcm_can_use_hugepages() {
+    char * e = getenv("RDMAV_HUGEPAGES_SAFE");
+    if (e) {
+        return atoi(e);
+    }
+    return 0;
+}
+
 /* RAII style heap memory class */
 
 class tcm_managed_mem {

@@ -71,33 +71,24 @@ void * tcm_mem_align_rdma(size_t size) {
     return NULL;
 #else
     int    ps  = 0;
-    int    hp  = 0;
     int    adv = 0;
-    char * e   = getenv("TCM_PAGE_SIZE");
-    if (e) {
-        ps = atoi(e);
-        if (!ps)
-            ps = tcm_get_page_size();
-        else
-            hp = 1;
-    } else {
-        if (TCM_DEFAULT_HUGEPAGE_SIZE) {
-            ps = TCM_DEFAULT_HUGEPAGE_SIZE;
-            hp = 1;
-        } else {
-            ps = tcm_get_page_size();
-        }
-    }
-    if (hp) {
-        e = getenv("RDMAV_HUGEPAGES_SAFE");
+    if (tcm_can_use_hugepages()) {
+        char * e   = getenv("TCM_PAGE_SIZE");
         if (e) {
-            if (atoi(e) != 1)
-                adv = MADV_NOHUGEPAGE;
-            else
-                adv = MADV_HUGEPAGE;
+            ps = atoi(e);
+            if (!ps)
+                ps = tcm_get_page_size();
         } else {
-            adv = MADV_NOHUGEPAGE;
+            if (TCM_DEFAULT_HUGEPAGE_SIZE) {
+                ps = TCM_DEFAULT_HUGEPAGE_SIZE;
+            } else {
+                ps = tcm_get_page_size();
+            }
         }
+        adv = MADV_HUGEPAGE;
+    } else {
+        ps = tcm_get_page_size();
+        adv = MADV_NOHUGEPAGE;
     }
     void * memptr = tcm_mem_align(size, ps);
     if (!memptr)
