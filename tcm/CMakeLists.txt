@@ -27,6 +27,7 @@ add_compile_options(
 
 add_library(tcm STATIC ${SOURCES})
 set_property(TARGET tcm PROPERTY C_STANDARD 99)
+set_property(TARGET tcm PROPERTY CXX_STANDARD 11)
 
 target_link_libraries(tcm fabric)
 target_include_directories(tcm
