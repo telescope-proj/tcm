@@ -137,15 +137,7 @@ ssize_t tcm_beacon::send_dgram(struct sockaddr * peer, void * data, ssize_t len,
     if (!this->timeout_active && !timeout) {
         ret = sendto(sock, data, len, 0, peer, sa_size);
         if (ret < 0) {
-            int err = tcm_sock_err;
-            switch (err) {
-                case EAGAIN:
-                case ENOBUFS:
-                case ETIMEDOUT:
-                    return -err;
-                default:
-                    throw err;
-            }
+            return -tcm_sock_err;
         }
         return ret;
     } else {
@@ -203,15 +195,7 @@ ssize_t tcm_beacon::recv_dgram(struct sockaddr * peer, void * data,
     if (!this->timeout_active && !timeout) {
         ret = recvfrom(sock, data, maxlen, 0, peer, &sas);
         if (ret < 0) {
-            int err = tcm_sock_err;
-            switch (err) {
-                case EAGAIN:
-                case ENOBUFS:
-                case ETIMEDOUT:
-                    return -err;
-                default:
-                    throw err;
-            }
+            return -tcm_sock_err;
         }
         return ret;
     } else {
