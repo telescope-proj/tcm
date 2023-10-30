@@ -124,7 +124,7 @@ ssize_t tcm_beacon::send_dgram(struct sockaddr * peer, void * data, ssize_t len,
 
     ret = poll(&pfd, 1, timeout_);
     if (ret < 0)
-        return ret;
+        return -tcm_last_sock_err;
     if (ret == 0)
         return -EAGAIN;
 
@@ -169,7 +169,7 @@ ssize_t tcm_beacon::recv_dgram(struct sockaddr * peer, void * data,
 
     ret = poll(&pfd, 1, timeout_);
     if (ret < 0)
-        return ret;
+        return -tcm_last_sock_err;
     if (ret == 0)
         return -EAGAIN;
 
