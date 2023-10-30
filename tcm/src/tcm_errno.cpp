@@ -415,7 +415,11 @@ const char * tcm_err_string(unsigned int err) {
         case TCM_ERR_UNSPECIFIED:
             return "Unspecified error";
         default:
-            snprintf(tmp_err, 31, "Unknown error %d", err);
+            if (err < FI_ERRNO_OFFSET)
+                return strerror(err);
+            if (err < TCM_ERR_UNSPECIFIED)
+                return fi_strerror(err);
+            snprintf(tmp_err, 32, "Unknown error %d", err);
             return tmp_err;
     }
 }

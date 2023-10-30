@@ -105,14 +105,21 @@ void tcm_mem::reg_internal_buffer() {
 }
 
 void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
+    tcm__log_trace("Registering MR: %p, len %lu, acs %lu, flags %lu", this->ptr,
+                   this->len, acs, flags);
     if (!this->ptr)
         throw ENOBUFS;
     if (this->mr)
         throw EINVAL;
-    int ret = fi_mr_reg(this->parent.get()->_get_domain(), this->ptr, this->len,
-                        acs, 0, 0, flags, &this->mr, (void *) this);
+    fid_domain * d =
+        (fid_domain *) this->parent.get()->_get_fi_resource(TCM_RESRC_DOMAIN);
+    assert(d);
+    int ret = fi_mr_reg(d, this->ptr, this->len, acs, 0, 0, flags, &this->mr,
+                        (void *) this);
     if (ret != 0)
         throw tcm_abs(ret);
+    tcm__log_trace("Registered MR:  %p, key %lu", this->ptr,
+                   fi_mr_key(this->mr));
 }
 
 void tcm_mem::dereg_internal_buffer() {

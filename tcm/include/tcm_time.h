@@ -5,25 +5,94 @@
 #ifndef TCM_TIME_H_
 #define TCM_TIME_H_
 
+#include <assert.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
-#include <errno.h>
 
-typedef enum {
-    TCM_MODE_CLOCK   = 0,
-    TCM_MODE_DELTA   = 1,
-    TCM_MODE_DEFAULT = 2,
-    TCM_MODE_MAX
-} tcm_time_mode;
+enum tcm_time_mode : uint8_t {
+    TCM_TIME_MODE_INVALID = 0,
+    TCM_TIME_MODE_SINGLE,
+    TCM_TIME_MODE_ABSOLUTE,
+    TCM_TIME_MODE_RELATIVE,
+    TCM_TIME_MODE_MAX
+};
 
-typedef struct {
-    struct timespec ts; // Timespec, 0sec/0nsec = one-shot
-    int64_t interval; // Polling interval in usec, <0 = blocking operation
-    bool    delta;    // 0: Real time (monotonic), 1: Delta
-} tcm_time;
+struct tcm_timeout {
+    int64_t timeout;
+    int64_t interval;
+};
 
-static inline int tcm_check_deadline(struct timespec * ts) {
+struct tcm_time {
+    struct timespec ts;
+    int64_t         interval;
+    int64_t         timeout;
+    tcm_time_mode   mode;
+
+    /* Single-shot mode */
+    tcm_time() {
+        this->mode       = TCM_TIME_MODE_SINGLE;
+        this->timeout    = 0;
+        this->interval   = 0;
+        this->ts.tv_sec  = 0;
+        this->ts.tv_nsec = 0;
+        return;
+    }
+
+    /* Relative timeout */
+    tcm_time(int64_t timeout_ms, int64_t interval_us) {
+        if (timeout_ms == 0)
+            this->mode = TCM_TIME_MODE_SINGLE;
+        else
+            this->mode = TCM_TIME_MODE_RELATIVE;
+
+        this->timeout  = timeout_ms;
+        this->interval = interval_us;
+    }
+
+    /* Absolute deadline */
+    tcm_time(struct timespec * deadline) {
+        this->mode = TCM_TIME_MODE_ABSOLUTE;
+        this->ts   = *deadline;
+    }
+};
+
+int64_t tcm_time_sleep(tcm_time * t, bool interruptable);
+void    tcm_get_abs_time(tcm_time * tt, struct timespec * ts);
+
+static inline tcm_time tcm_time_select(tcm_time * param, tcm_time * default_) {
+    tcm_time out;
+    if (!param) {
+        out = *default_;
+    } else {
+        out = *param;
+    }
+    return out;
+}
+
+static inline float tcm_timespec_diff(const timespec * start,
+                                      const timespec * end) {
+    assert(start);
+    assert(end);
+    return (end->tv_sec - start->tv_sec) +
+           (end->tv_nsec - start->tv_nsec) / 1e9;
+}
+
+/*  Return the number of seconds remaining until a specific deadline in
+    the future. */
+static inline float tcm_get_sec_left(const timespec * end) {
+    assert(end);
+    timespec now;
+    int      ret = clock_gettime(CLOCK_MONOTONIC, &now);
+    if (ret == -1)
+        return -errno;
+
+    return tcm_timespec_diff(&now, end);
+}
+
+/* Check whether an absolute deadline has passed. */
+static inline int tcm_check_deadline(const timespec * ts) {
     /* Special value for single poll */
     if (ts->tv_sec == 0 && ts->tv_nsec == 0)
         return 1;
@@ -117,26 +186,6 @@ static inline int tcm_fsleep(float sec) {
 
     return 0;
 #endif
-}
-
-static inline int tcm_conv_time(tcm_time * tt, struct timespec * ts) {
-    if (tt->delta) {
-        struct timespec cur;
-        int             ret = clock_gettime(CLOCK_MONOTONIC, &cur);
-        if (ret < 0) {
-            return -errno;
-        }
-        ts->tv_sec  = cur.tv_sec + tt->ts.tv_sec;
-        ts->tv_nsec = cur.tv_nsec + tt->ts.tv_nsec;
-        if (ts->tv_nsec > 1000000000) {
-            ts->tv_sec++;
-            ts->tv_nsec -= 1000000000;
-        }
-    } else {
-        ts->tv_sec  = tt->ts.tv_sec;
-        ts->tv_nsec = tt->ts.tv_nsec;
-    }
-    return 0;
 }
 
 #endif

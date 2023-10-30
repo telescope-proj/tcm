@@ -15,6 +15,8 @@ set(SOURCES
   src/tcm_mem.cpp
   src/tcm_mm.cpp
   src/tcm_msg.cpp
+  src/tcm_time.cpp
+  src/tcm_version.cpp
 )
 
 find_library(Libfabric NAMES fabric)

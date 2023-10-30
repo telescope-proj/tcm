@@ -71,9 +71,7 @@ ssize_t tcm_fabric::data_xfer(uint8_t type, tcm_mem & mem, uint64_t offset,
                               fi_addr_t peer, uint8_t sync, void * ctx) {
     ssize_t         ret;
     struct timespec dl;
-    ret = tcm_conv_time(&this->timeout, &dl);
-    if (ret < 0)
-        throw ret;
+    tcm_get_abs_time(&this->timeout, &dl);
 
     if (!mem._check_parent(this)) {
         tcm__log_error("Invalid memory region used for fabric object");
@@ -139,6 +137,7 @@ ssize_t tcm_fabric::data_xfer(uint8_t type, tcm_mem & mem, uint64_t offset,
         } while (!tcm_check_deadline(&dl));
     }
 
+    tcm__log_trace("Timed out %d %d %lu.%lu %lu.%lu %d", this->timeout.timeout, this->timeout.interval, this->timeout.ts.tv_sec, this->timeout.ts.tv_nsec, dl.tv_sec, dl.tv_nsec, this->timeout.mode);
     return -ETIMEDOUT;
 }
 

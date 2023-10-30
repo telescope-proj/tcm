@@ -48,15 +48,13 @@ int tcm_fabric::init_fabric_domain(uint32_t version, uint64_t flags,
     /* Add the features required by the fabric abstraction, overwriting if
        the user provided something different */
 
+    hints->ep_attr->type = FI_EP_RDM;
     hints->domain_attr->mr_mode =
         FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_LOCAL;
-    hints->mode          = FI_LOCAL_MR;
-    hints->ep_attr->type = FI_EP_RDM;
-    hints->caps |= FI_MSG | FI_RMA | FI_TAGGED;
     hints->mode |= FI_RX_CQ_DATA | FI_LOCAL_MR;
-    hints->domain_attr->mr_mode = FI_MR_BASIC;
-    hints->tx_attr->caps |= FI_TAGGED;
-    hints->rx_attr->caps |= FI_TAGGED;
+    hints->caps |= FI_MSG | FI_RMA | FI_TAGGED;
+    hints->tx_attr->caps |= FI_MSG | FI_RMA | FI_TAGGED;
+    hints->rx_attr->caps |= FI_MSG | FI_RMA | FI_TAGGED;
 
     ret = fi_getinfo(version ? version : TCM_DEFAULT_FABRIC_VERSION, NULL, NULL,
                      flags, hints, &fi);
@@ -96,7 +94,6 @@ int tcm_fabric::init_fabric_domain(uint32_t version, uint64_t flags,
         goto err_fabric;
     }
 
-    tcm__log_info("-> %s", tmp_fi->fabric_attr->name);
     this->fi = fi_dupinfo(tmp_fi);
     fi_freeinfo(fi);
     return 0;
@@ -126,9 +123,10 @@ int tcm_fabric::init(std::shared_ptr<tcm_internal::shared_fi> shrd,
     if (timeout) {
         this->timeout = *timeout;
     } else {
-        this->timeout.delta      = 1;
         this->timeout.interval   = 500;
-        this->timeout.ts.tv_sec  = 3000;
+        this->timeout.timeout    = 3000;
+        this->timeout.mode       = TCM_TIME_MODE_RELATIVE;
+        this->timeout.ts.tv_sec  = 0;
         this->timeout.ts.tv_nsec = 0;
     }
 
@@ -137,7 +135,7 @@ int tcm_fabric::init(std::shared_ptr<tcm_internal::shared_fi> shrd,
     struct fi_cq_attr cq_attr;
     memset(&cq_attr, 0, sizeof(cq_attr));
     cq_attr.size      = this->fi->tx_attr->size;
-    cq_attr.wait_obj  = FI_WAIT_UNSPEC;
+    cq_attr.wait_obj  = FI_WAIT_FD;
     cq_attr.format    = FI_CQ_FORMAT_TAGGED;
     cq_attr.wait_cond = FI_CQ_COND_NONE;
     ret = fi_cq_open(this->top.get()->domain, &cq_attr, &this->tx_cq, NULL);
@@ -251,12 +249,9 @@ int tcm_fabric::init(std::shared_ptr<tcm_internal::shared_fi> shrd,
     }
     strncpy(this->prov_name, this->fi->fabric_attr->prov_name,
             sizeof(this->prov_name) - 1);
-    this->proto              = this->fi->ep_attr->protocol;
-    this->addr_fmt           = this->fi->addr_format;
-    this->timeout.delta      = 1;
-    this->timeout.interval   = 1;
-    this->timeout.ts.tv_sec  = 3;
-    this->timeout.ts.tv_nsec = 0;
+    this->proto        = this->fi->ep_attr->protocol;
+    this->addr_fmt     = this->fi->addr_format;
+    this->transport_id = prov_name_to_id(this->fi->fabric_attr->prov_name);
     return 0;
 
 err_fabric:
@@ -279,6 +274,8 @@ tcm_fabric::tcm_fabric(tcm_fabric_child_opts & opts, tcm_fabric * parent) {
     if (!parent)
         throw EINVAL;
 
+    assert(opts.fi);
+    this->top              = opts.fi;
     this->fi               = fi_dupinfo(parent->fi);
     struct sockaddr_in sai = *(struct sockaddr_in *) parent->src_addr;
     sai.sin_port           = opts.port;
@@ -341,12 +338,7 @@ tcm_fabric::~tcm_fabric() {
     tcm__log_trace("Fabric resources cleaned up");
 }
 
-void tcm_fabric::set_timeout(tcm_time & timeout) {
-    tcm__log_debug("Fabric timeout modified: s=%d,ns=%d,delta=%d,int=%d",
-                   timeout.ts.tv_sec, timeout.ts.tv_nsec, timeout.delta,
-                   timeout.interval);
-    this->timeout = timeout;
-}
+void tcm_fabric::set_timeout(tcm_time & timeout) { this->timeout = timeout; }
 
 int tcm_fabric::get_name(void * buf, size_t * buf_size) {
     int ret;
@@ -355,20 +347,65 @@ int tcm_fabric::get_name(void * buf, size_t * buf_size) {
         tcm__log_debug("fi_getname failed: %s", fi_strerror(tcm_abs(ret)));
         return ret;
     }
+
+    if (this->src_addrlen < *buf_size) {
+        void * p = realloc(this->src_addr, *buf_size);
+        if (!p) {
+            tcm__log_debug("Memory allocation failed");
+            return -ENOMEM;
+        }
+        this->src_addr = p;
+    }
+
+    this->src_addrlen = *buf_size;
+    memcpy((void *) this->src_addr, buf, *buf_size);
+
     tcm__log_debug("Read fabric endpoint address buf=%p, size=%lu", buf,
                    *buf_size);
-    return ret;
+    return 0;
 }
 
 int tcm_fabric::set_name(void * buf, size_t buf_size) {
     tcm__log_debug("Modifying fabric endpoint address buf=%p, size=%lu", buf,
                    buf_size);
-    return fi_setname(&this->ep->fid, buf, buf_size);
+    int ret = fi_setname(&this->ep->fid, buf, buf_size);
+    if (ret < 0)
+        return ret;
+
+    if (this->src_addrlen < buf_size) {
+        void * p = realloc(this->src_addr, buf_size);
+        if (!p) {
+            tcm__log_debug("Memory allocation failed");
+            return -ENOMEM;
+        }
+        this->src_addr = p;
+    }
+
+    this->src_addrlen = buf_size;
+    memcpy((void *) this->src_addr, buf, buf_size);
+
+    return 0;
 }
 
-struct fid_domain * tcm_fabric::_get_domain() {
-    return this->top.get()->domain;
+void * tcm_fabric::_get_fi_resource(tcm_fabric_resource res) {
+    switch (res) {
+        case TCM_RESRC_FABRIC:
+            return (void *) this->top.get()->fabric;
+        case TCM_RESRC_DOMAIN:
+            return (void *) this->top.get()->domain;
+        case TCM_RESRC_RX_CQ:
+            return (void *) this->rx_cq;
+        case TCM_RESRC_TX_CQ:
+            return (void *) this->tx_cq;
+        case TCM_RESRC_PARAM:
+            return (void *) this->fi;
+        default:
+            errno = EINVAL;
+            return 0;
+    }
 }
+
+tcm_tid tcm_fabric::_get_tid() { return this->transport_id; }
 
 int tcm_serialize_addr(void * addr, int addr_len, uint32_t addr_fmt,
                        void * out_buf, int * buf_size) {

@@ -6,6 +6,8 @@
 #define TCM_ERRNO_H_
 
 #include <compat/tcmc_stable_errno.h>
+#include <rdma/fi_errno.h>
+#include <string.h>
 
 /* ----- Additional errno values for internal tcm errors ----- */
 

@@ -26,6 +26,16 @@
 
 #define TCM_DEFAULT_FABRIC_VERSION FI_VERSION(1, 10)
 
+enum tcm_fabric_resource : uint64_t {
+    TCM_RESRC_INVALID = 0,
+    TCM_RESRC_FABRIC  = (1 << 0),
+    TCM_RESRC_DOMAIN  = (1 << 1),
+    TCM_RESRC_TX_CQ   = (1 << 2),
+    TCM_RESRC_RX_CQ   = (1 << 3),
+    TCM_RESRC_AV      = (1 << 4),
+    TCM_RESRC_PARAM   = (1 << 5),
+};
+
 class tcm_mem;
 class tcm_fabric;
 
@@ -33,6 +43,13 @@ static inline int tcm_get_av_error(int ret, int fret) {
     return -tcm_abs(fret == 0 ? (ret == 0 ? FI_EOTHER : ret) : fret);
 }
 
+/* Get the last CQ error.
+   If ret is any value except -FI_EAVAIL, then the function returns ret (i.e.,
+   this function can be safely used even if there was no error). Otherwise, the
+   function checks the CQ for the last error and returns it, unless an error
+   occurred, in which case it returns the error that occurred while trying to
+   read from the CQ.
+*/
 static inline int tcm_get_cq_error(int ret, struct fid_cq * cq,
                                    struct fi_cq_err_entry * err) {
     struct fi_cq_err_entry lerr;
@@ -45,12 +62,17 @@ static inline int tcm_get_cq_error(int ret, struct fid_cq * cq,
         if (ret != 1)
             return -tcm_abs(ret == 0 ? 1 : ret);
 
-        tcm__log_error("CQ %p | Error: %d (%s) | ProvErr: %d", cq, err->err,
-                       fi_strerror(err->err), err->prov_errno);
+        tcm__log_error("CQ %p | Error: %d (%s)", cq, err->err,
+                       fi_strerror(err->err));
+        if (err->err_data && err->err_data_size) {
+            tcm__log_error(
+                "Fabric provider error: %s",
+                fi_cq_strerror(cq, err->prov_errno, err->err_data, NULL, 0));
+        }
 
         return -tcm_abs(err->err);
     }
-    return -tcm_abs(ret);
+    return ret;
 }
 
 class tcm_mem {
@@ -118,6 +140,11 @@ class shared_fi {
 
 } // namespace tcm_internal
 
+struct tcm_fabric_cq_fds {
+    int tx;
+    int rx;
+};
+
 struct tcm_fabric_init_opts {
     uint32_t         version;
     uint64_t         flags;
@@ -175,20 +202,48 @@ class tcm_fabric : public std::enable_shared_from_this<tcm_fabric> {
     int accept_client(tcm_beacon & beacon, struct sockaddr * peer,
                       fi_addr_t * addr);
     int client(tcm_beacon & beacon, struct sockaddr * peer, fi_addr_t * addr,
-               uint16_t cid);
+               bool fast);
 
     /* Other control functions */
+
+    /* Set the timeout of the fabric for managed data transfer functions. Has no
+     * effect if Libfabric functions are called directly. */
     void set_timeout(tcm_time & timeout);
-    int  get_name(void * buf, size_t * buf_size);
-    int  set_name(void * buf, size_t buf_size);
+
+    /* Get the address of the active fabric. */
+    int get_name(void * buf, size_t * buf_size);
+
+    /* Set the address of the active fabric. */
+    int set_name(void * buf, size_t buf_size);
 
     /* Peer management functions */
     fi_addr_t add_peer(struct sockaddr * peer);
     int       remove_peer(fi_addr_t peer);
 
     /* CQ functions */
+
+    /* Poll the transmit queue (regular/tagged send, RDMA read/write ops) */
     ssize_t poll_tx(struct fi_cq_err_entry * err);
+
+    /* Poll the receive queue (regular/tagged recv ops) */
     ssize_t poll_rx(struct fi_cq_err_entry * err);
+
+    /* Check if the underlying CQs can be waited on using poll().
+       This function returns a bit field where TCM_RESRC_TX_CQ and
+       TCM_RESRC_RX_CQ flags can be set, indicating the specific CQ can
+       be blocked on using poll(), select(), etc.
+
+       If an error occurred on either CQ, a negative error code is returned,
+       and the value out will be set to one of the failed CQs (priority RX CQ).
+    */
+    int cq_waitable(int * out);
+
+    /* Get underlying wait objects. Sets the parameter out to the file
+       descriptors of the CQs. If an error occurred, -1 is returned and
+       out->tx/rx is set to a negative error number that occurred while trying
+       to get the wait object for that CQ.
+     */
+    int get_cq_fds(tcm_fabric_cq_fds * out);
 
     /* Standard data transfer functions */
     ssize_t send(tcm_mem & mem, fi_addr_t peer, void * ctx, uint64_t offset,
@@ -221,7 +276,8 @@ class tcm_fabric : public std::enable_shared_from_this<tcm_fabric> {
                                            fi_addr_t * new_peer);
 
     /* Functions only to be called internally by library functions */
-    struct fid_domain * _get_domain();
+    void *  _get_fi_resource(tcm_fabric_resource resource);
+    tcm_tid _get_tid();
 };
 
 #endif

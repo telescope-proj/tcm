@@ -2,40 +2,41 @@
 // Telescope Connection Manager
 // Copyright (c) 2023 Tim Dettmar
 
+#include "compat/tcmc_net.h"
 #include "tcm_time.h"
-#include "tcm_udp.h"
 
 class tcm_beacon {
     struct sockaddr_storage sa;
-    tcm_sock_mode           mode;
     tcm_sock                sock;
-    tcm_time                timeout;
-    uint8_t                 timeout_active;
+    int                     timeout;
 
     void clear_fields();
-    void create_sock(struct sockaddr * sa, tcm_sock_mode mode);
+    void create_sock(struct sockaddr * sa);
     void close_sock();
 
   public:
     /* Client only! */
     tcm_beacon();
-    
+
     tcm_beacon(struct sockaddr * sa);
-    tcm_beacon(struct sockaddr * sa, tcm_sock_mode mode);
-    tcm_beacon(struct sockaddr * sa, tcm_sock_mode mode, tcm_time * timeout);
+    tcm_beacon(struct sockaddr * sa, int timeout);
 
     ~tcm_beacon();
 
     int set_peer(struct sockaddr * sa);
     int reset_peer();
 
-    void set_timeout(tcm_time * time);
+    void set_timeout(int ms);
+    int get_timeout();
+
+    /* Get the underlying socket descriptor. */
+    tcm_sock get_sock();
 
     ssize_t send_dgram(struct sockaddr * peer, void * data, ssize_t len);
     ssize_t send_dgram(struct sockaddr * peer, void * data, ssize_t len,
-                       tcm_time * timeout);
+                       int timeout);
 
     ssize_t recv_dgram(struct sockaddr * peer, void * data, ssize_t maxlen);
     ssize_t recv_dgram(struct sockaddr * peer, void * data, ssize_t maxlen,
-                       tcm_time * timeout);
+                       int timeout);
 };
