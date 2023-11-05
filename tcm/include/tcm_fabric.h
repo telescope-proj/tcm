@@ -28,16 +28,23 @@
 
 enum tcm_fabric_resource : uint64_t {
     TCM_RESRC_INVALID = 0,
-    TCM_RESRC_FABRIC  = (1 << 0),
-    TCM_RESRC_DOMAIN  = (1 << 1),
-    TCM_RESRC_TX_CQ   = (1 << 2),
-    TCM_RESRC_RX_CQ   = (1 << 3),
-    TCM_RESRC_AV      = (1 << 4),
-    TCM_RESRC_PARAM   = (1 << 5),
+    TCM_RESRC_FABRIC  = (1 << 0), // Fabric (fid_fabric)
+    TCM_RESRC_DOMAIN  = (1 << 1), // Domain (fid_domain)
+    TCM_RESRC_TX_CQ   = (1 << 2), // Transmit CQ (fid_cq)
+    TCM_RESRC_RX_CQ   = (1 << 3), // Receive CQ (fid_cq)
+    TCM_RESRC_CQ    = (1 << 4), // Combined CQ (if both rx/tx are bound to 1 cq)
+    TCM_RESRC_AV    = (1 << 5), // Address vector (fid_av)
+    TCM_RESRC_PARAM = (1 << 6), // Connection parameters (fi_info struct)
+    TCM_RESRC_RKEY_COUNTER = (1 << 7) // Remote key counter
+};
+
+enum tcm_flag {
+    TCM_FLAG_SINGLE_CQ = (1 << 0), // Use a single CQ for send/receive
 };
 
 class tcm_mem;
 class tcm_fabric;
+class tcm_endpoint;
 
 static inline int tcm_get_av_error(int ret, int fret) {
     return -tcm_abs(fret == 0 ? (ret == 0 ? FI_EOTHER : ret) : fret);
@@ -104,10 +111,13 @@ class tcm_mem {
 
     ~tcm_mem();
 
+    /* The indirection operator is shorthand for mem->get_ptr(). */
+    void *          operator*();
     void *          get_ptr();
     struct fid_mr * get_mr();
     void *          get_mr_desc();
     uint64_t        get_len();
+    uint64_t        get_offset(void * ptr);
 
     void refresh_mr(void * ptr, uint64_t len);
     void refresh_mr(void * ptr, uint64_t len, uint64_t acs, uint64_t flags);
@@ -116,10 +126,17 @@ class tcm_mem {
 };
 
 struct tcm_remote_mem {
-    fi_addr_t peer;
-    uint64_t  addr;
-    uint64_t  rkey;
-    uint64_t  len;
+    fi_addr_t peer; // The peer that this memory region belongs to
+    uint64_t  addr; // Base address or IOVA of the memory region
+    uint64_t  rkey; // Remote access key
+    uint64_t  len;  // Length of the buffer
+
+    tcm_remote_mem() {
+        addr = 0;
+        rkey = 0;
+        len  = 0;
+        peer = FI_ADDR_UNSPEC;
+    }
     tcm_remote_mem(fi_addr_t peer, uint64_t addr, uint64_t len, uint64_t rkey) {
         this->peer = peer;
         this->addr = addr;
@@ -131,10 +148,11 @@ struct tcm_remote_mem {
 namespace tcm_internal {
 class shared_fi {
   public:
-    struct fid_fabric * fabric;
-    struct fid_domain * domain;
+    fid_fabric * fabric;
+    fid_domain * domain;
+    uint64_t     rkey_counter;
 
-    shared_fi(struct fid_fabric * fabric, struct fid_domain * domain);
+    shared_fi(fid_fabric * fabric, fid_domain * domain);
     ~shared_fi();
 };
 
@@ -149,101 +167,117 @@ struct tcm_fabric_init_opts {
     uint32_t         version;
     uint64_t         flags;
     struct fi_info * hints;
+    bool             no_getinfo; // Use hints directly, don't run fi_getinfo
     tcm_time *       timeout;
+    uint64_t         tcm_flags;
 };
 
-struct tcm_fabric_child_opts {
-    std::shared_ptr<tcm_internal::shared_fi> fi;
-    uint16_t                                 port;
-    tcm_time *                               timeout;
-};
+class tcm_endpoint : public std::enable_shared_from_this<tcm_endpoint> {
+    std::shared_ptr<tcm_fabric> fabric;
+    fid_ep *                    ep;
+    tcm_time                    timeout;
+    void *                      src_addr;
+    size_t                      src_addrlen;
+    volatile int *              exit_flag;
 
-class tcm_fabric : public std::enable_shared_from_this<tcm_fabric> {
-    std::shared_ptr<tcm_internal::shared_fi> top; // Shareable top level objects
-    struct fid_cq *                          tx_cq; // Transmit completion queue
-    struct fid_cq *                          rx_cq; // Receive completion queue
-    struct fid_av *                          av;    // Address vector
-    struct fid_ep *                          ep;    // Endpoint
-    uint32_t                                 proto; // Libfabric protocol
-    uint32_t         addr_fmt;                      // Libfabric address format
-    uint32_t         transport_id;                  // TCM Transport ID
-    char             prov_name[32];                 // Libfabric provider name
-    tcm_time         timeout;                       // Default timeout
-    uint32_t         fabric_version; // Libfabric API version used
-    uint64_t         fabric_flags;   // Init flags
-    void *           src_addr;       // Source address
-    size_t           src_addrlen;    // Source address length
-    struct fi_info * hints;          // Fabric creation hints
-    struct fi_info * fi;             // Created fabric details
-    int              op_mode;        // Operation mode (1=server, 2=client)
+    /**
+     * @brief Internal data transfer function (read/write and tagged
+     * equivalents)
+     *
+     * @param type      Transfer type
+     *
+     * @param peer      Fabric peer
+     *
+     * @param mem       Memory region
+     *
+     * @param offset    Offset within the memory region provided
+     *
+     * @param len       Length of the message to send / maximum length of the
+     *                  message to receive
+     *
+     * @param tag       Message tag (ignored for non-tagged ops)
+     *
+     * @param mask      Message tag mask (ignored except for tagged recv ops)
+     *
+     * @param sync      Synchronous mode
+     *
+     * In synchronous mode, the CQ is immediately read after posting the data
+     * transfer operation. Note that this mode is not thread safe; synchronous
+     * mode is primarily intended for connection bootstrapping before multiple
+     * threads access the same fabric resources.
+     *
+     * @param ctx       Optional context to associate with the operation. This
+     *                  context is returned on completions.
+     *
+     * @return In async mode: 0 on success, negative error code on failure.
+     *
+     * In sync mode: the number of bytes transferred, or -ETIMEDOUT/-EAGAIN
+     * in case a completion was not generated in time.
+     */
+    ssize_t data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
+                      uint64_t offset, uint64_t len, uint64_t tag,
+                      uint64_t mask, uint8_t sync, void * ctx);
 
-    int init(std::shared_ptr<tcm_internal::shared_fi> fi,
-             struct sockaddr_in * addr, tcm_time * timeout);
-    int init_fabric_domain(uint32_t version, uint64_t flags,
-                           struct fi_info * hints);
+    /**
+     * @brief Internal RDMA data transfer function (read/write functions)
+     *
+     * @param type          Transfer type
+     *
+     * @param peer          Fabric peer
+     *
+     * @param mem           Memory region
+     *
+     * @param rmem          Remote memory region handle containing peer address
+     *
+     * @param local_offset  The offset within the local memory buffer
+     *
+     * @param remote_offset The offset within the remote memory buffer
+     *
+     * @param len           The length of the data to read/write
+     *
+     * @param ctx           Optional context to associate with the operation.
+     *                      This context is returned on completions.
+     *
+     * @return 0 on success, negative error code on failure. Async mode only.
+     */
+    ssize_t data_xfer_rdma(uint8_t type, fi_addr_t peer, tcm_mem & mem,
+                           tcm_remote_mem & rmem, uint64_t local_offset,
+                           uint64_t remote_offset, uint64_t len, void * ctx);
 
-    void    clear_fields();
-    ssize_t poll_cq(struct fid_cq * cq, struct fi_cq_err_entry * err,
-                    tcm_time * timeout);
-    ssize_t data_xfer(uint8_t type, tcm_mem & mem, uint64_t offset,
-                      uint64_t len, uint64_t tag, uint64_t mask, fi_addr_t peer,
-                      uint8_t sync, void * context);
-    ssize_t data_xfer_rdma(uint8_t type, tcm_mem & mem, tcm_remote_mem & rmem,
-                           uint64_t local_offset, uint64_t remote_offset,
-                           uint64_t len, fi_addr_t peer, void * ctx);
+    void clear_fields();
 
   public:
-    tcm_fabric(struct tcm_fabric_init_opts & opts);
-    tcm_fabric(struct tcm_fabric_child_opts & opts, tcm_fabric * parent);
+    /**
+     * @brief Create a new endpoint bound to a fabric.
+     *
+     * @param fabric    The fabric object
+     * @param src_addr  Source address.
+     *
+     * If this value is unset, it relies on the fabric object containing the
+     * source address, which is not guaranteed and will not work for multiple
+     * endpoints attached to the same fabric.
+     *
+     * The source address should always be set to the address of a physical NIC.
+     * However, the port may be 0 for dynamic port assignment.
+     *
+     * @param timeout   Timeout object.
+     *
+     * This object will be used for all synchronous operations when a timeout is
+     * unspecified.
+     */
+    tcm_endpoint(std::shared_ptr<tcm_fabric> fabric, sockaddr * src_addr,
+                 tcm_time * timeout);
 
-    ~tcm_fabric();
+    ~tcm_endpoint();
 
-    /* Connection setup */
-    int accept_client(tcm_beacon & beacon, struct sockaddr * peer,
-                      fi_addr_t * addr);
-    int client(tcm_beacon & beacon, struct sockaddr * peer, fi_addr_t * addr,
-               bool fast);
-
-    /* Other control functions */
-
-    /* Set the timeout of the fabric for managed data transfer functions. Has no
-     * effect if Libfabric functions are called directly. */
-    void set_timeout(tcm_time & timeout);
+    /* Bind a flag which can be used to interrupt fabric functions. */
+    void bind_exit_flag(volatile int * flag);
 
     /* Get the address of the active fabric. */
     int get_name(void * buf, size_t * buf_size);
 
     /* Set the address of the active fabric. */
     int set_name(void * buf, size_t buf_size);
-
-    /* Peer management functions */
-    fi_addr_t add_peer(struct sockaddr * peer);
-    int       remove_peer(fi_addr_t peer);
-
-    /* CQ functions */
-
-    /* Poll the transmit queue (regular/tagged send, RDMA read/write ops) */
-    ssize_t poll_tx(struct fi_cq_err_entry * err);
-
-    /* Poll the receive queue (regular/tagged recv ops) */
-    ssize_t poll_rx(struct fi_cq_err_entry * err);
-
-    /* Check if the underlying CQs can be waited on using poll().
-       This function returns a bit field where TCM_RESRC_TX_CQ and
-       TCM_RESRC_RX_CQ flags can be set, indicating the specific CQ can
-       be blocked on using poll(), select(), etc.
-
-       If an error occurred on either CQ, a negative error code is returned,
-       and the value out will be set to one of the failed CQs (priority RX CQ).
-    */
-    int cq_waitable(int * out);
-
-    /* Get underlying wait objects. Sets the parameter out to the file
-       descriptors of the CQs. If an error occurred, -1 is returned and
-       out->tx/rx is set to a negative error number that occurred while trying
-       to get the wait object for that CQ.
-     */
-    int get_cq_fds(tcm_fabric_cq_fds * out);
 
     /* Standard data transfer functions */
     ssize_t send(tcm_mem & mem, fi_addr_t peer, void * ctx, uint64_t offset,
@@ -262,20 +296,79 @@ class tcm_fabric : public std::enable_shared_from_this<tcm_fabric> {
     ssize_t srecv(tcm_mem & mem, fi_addr_t peer, uint64_t offset, uint64_t len);
 
     /* One-sided RDMA transfer functions */
-    ssize_t rwrite(tcm_mem & mem, fi_addr_t peer, void * ctx,
-                   uint64_t local_offset, uint64_t remote_offset, uint64_t len,
-                   tcm_remote_mem & rmem);
-    ssize_t rread(tcm_mem & mem, fi_addr_t peer, void * ctx,
-                  uint64_t local_offset, uint64_t remote_offset, uint64_t len,
-                  tcm_remote_mem & rmem);
+    ssize_t rwrite(tcm_mem & mem, tcm_remote_mem & rmem, void * ctx,
+                   uint64_t local_offset, uint64_t remote_offset, uint64_t len);
+    ssize_t rread(tcm_mem & mem, tcm_remote_mem & rmem, void * ctx,
+                  uint64_t local_offset, uint64_t remote_offset, uint64_t len);
+};
 
-    /* Create a new fabric connection with the same features as the
-     * existing connection (on a different port). */
-    std::shared_ptr<tcm_fabric> split_conn(fi_addr_t peer, uint16_t port,
-                                           uint8_t     shared,
-                                           fi_addr_t * new_peer);
+class tcm_fabric : public std::enable_shared_from_this<tcm_fabric> {
+    friend class tcm_endpoint;
+    friend class tcm_mem;
+    std::shared_ptr<tcm_internal::shared_fi> top; // Shareable top level objects
+    fid_cq *                                 cq;  // Completion queue
+    fid_av *                                 av;  // Address vector
+    uint32_t                                 proto; // Libfabric protocol
+    uint32_t       addr_fmt;                        // Libfabric address format
+    uint32_t       transport_id;                    // TCM Transport ID
+    char           prov_name[32];                   // Libfabric provider name
+    tcm_time       timeout;                         // Default timeout
+    uint32_t       fabric_version; // Libfabric API version used
+    uint64_t       fabric_flags;   // Init flags
+    void *         src_addr;       // Source address
+    size_t         src_addrlen;    // Source address length
+    fi_info *      hints;          // Fabric creation hints
+    fi_info *      fi;             // Created fabric details
+    int            op_mode;        // Operation mode (1=server, 2=client)
+    fi_wait_obj    wait_type;      // Wait object type
+    volatile int * exit_flag;      // Early exit broadcast flag
 
-    /* Functions only to be called internally by library functions */
+    int init(std::shared_ptr<tcm_internal::shared_fi> fi, tcm_time * timeout);
+    int init_fabric_domain(uint32_t version, uint64_t flags, fi_info * hints,
+                           bool no_getinfo);
+
+    void    clear_fields();
+    ssize_t poll_cq(fid_cq * cq, fi_cq_err_entry * err, size_t n,
+                    tcm_time * timeout);
+
+  public:
+    tcm_fabric(tcm_fabric_init_opts & opts);
+
+    ~tcm_fabric();
+
+    /* Bind a flag which can be used to interrupt fabric functions. */
+    void bind_exit_flag(volatile int * flag);
+
+    /* Get Libfabric version of this specific fabric instance */
+    uint32_t get_version() { return this->fabric_version; }
+
+    /* Other control functions */
+
+    /* Set the timeout of the fabric for managed data transfer functions. Has no
+     * effect if Libfabric functions are called directly. */
+    void set_timeout(tcm_time & timeout);
+
+    /* Peer management functions */
+    fi_addr_t add_peer(sockaddr * peer);
+    int       remove_peer(fi_addr_t peer);
+    int       lookup_peer(fi_addr_t peer, sockaddr * addr, size_t * size);
+
+    /* Poll the internal CQ once. */
+    ssize_t poll_cq(fi_cq_err_entry * err);
+
+    /* Poll the internal CQ until the specified timeout. */
+    ssize_t poll_cq(fi_cq_err_entry * err, tcm_time * timeout);
+
+    /**
+     * @brief Attempt to get the underlying CQ FD.
+     * @return The file descriptor or a negative error code on error.
+     *
+     * If the CQ does not support FD wait objects, -ENOTSUP is returned.
+     * If the CQ may not currently be waited on, -EAGAIN is returned.
+     */
+    int get_cq_fd();
+
+    /* Advanced direct resource access functions */
     void *  _get_fi_resource(tcm_fabric_resource resource);
     tcm_tid _get_tid();
 };

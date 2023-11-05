@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
+
 #include "tcm_time.h"
 
 int64_t tcm_time_sleep(tcm_time * t, bool interruptable) {

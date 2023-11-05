@@ -4,8 +4,10 @@
 
 #include "tcm_fabric.h"
 #include "tcm_log.h"
+#include <assert.h>
 
-fi_addr_t tcm_fabric::add_peer(struct sockaddr * peer) {
+fi_addr_t tcm_fabric::add_peer(sockaddr * peer) {
+    assert(peer);
     fi_addr_t out;
     int       ret, sas;
     sas = tcm_internal::get_sa_size(peer);
@@ -14,10 +16,9 @@ fi_addr_t tcm_fabric::add_peer(struct sockaddr * peer) {
 
     char addr[INET6_ADDRSTRLEN];
     tcm__log_debug("Adding peer to AV: %s:%d",
-                   inet_ntop(peer->sa_family,
-                             &((struct sockaddr_in *) peer)->sin_addr, addr,
-                             sas),
-                   ntohs(((struct sockaddr_in *) peer)->sin_port));
+                   inet_ntop(peer->sa_family, &((sockaddr_in *) peer)->sin_addr,
+                             addr, sas),
+                   ntohs(((sockaddr_in *) peer)->sin_port));
 
     int retv = 0;
     ret      = fi_av_insert(this->av, peer, 1, &out, FI_SYNC_ERR, &retv);
@@ -31,4 +32,11 @@ fi_addr_t tcm_fabric::add_peer(struct sockaddr * peer) {
 
 int tcm_fabric::remove_peer(fi_addr_t peer) {
     return fi_av_remove(this->av, &peer, 1, 0);
+}
+
+int tcm_fabric::lookup_peer(fi_addr_t peer, sockaddr * out, size_t * size) {
+    assert(out);
+    assert(size);
+    int ret;
+    return fi_av_lookup(this->av, peer, (void*) out, size);
 }

@@ -26,6 +26,7 @@ static const char * strs[] = {"Valid",
                               "Programming error"};
 
 const char * stringify(tcm_mv_result res) {
+    assert(res >= VALID);
     assert(res <= MAX);
     return strs[res];
 }

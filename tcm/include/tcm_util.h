@@ -8,7 +8,11 @@
 #define tcm_abs(x) (x >= 0 ? x : -x)
 #define tcm_negabs(x) (x <= 0 ? x : -x)
 #define TCM_MAX_ADDR_LEN 128
-#define tcm_free_unset(x) free(x); x = 0;
+#define tcm_free_unset(x)                                                      \
+    do {                                                                       \
+        free(x);                                                               \
+        x = 0;                                                                 \
+    } while (0);
 
 // int tcm_validate_ipv4_addr(uint32_t addr) {
 //     in_addr_t ranges[] = {

@@ -1,3 +1,5 @@
 client
 server
+client_config.h
+server_config.h
 tcm_bin/

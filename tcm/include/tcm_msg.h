@@ -92,13 +92,15 @@ static inline int tcm_conv_fi_addr_fmt(uint32_t addr_fmt) {
 }
 
 static inline tcm_tid prov_name_to_id(char * prov_name) {
-    if (strncmp("verbs;ofi_rxm", prov_name, 13) == 0 ||
-        strncmp("ofi_rxm;verbs", prov_name, 13) == 0)
+    if (strcmp("verbs;ofi_rxm", prov_name) == 0 ||
+        strcmp("ofi_rxm;verbs", prov_name) == 0)
         return TCM_TID_VERBS_RXM;
-    if (strncmp("tcp;ofi_rxm", prov_name, 11) == 0 ||
-        strncmp("ofi_rxm;tcp", prov_name, 11) == 0)
+    if (strcmp("tcp;ofi_rxm", prov_name) == 0 ||
+        strcmp("ofi_rxm;tcp", prov_name) == 0)
         return TCM_TID_TCP_RXM;
-    return -EINVAL;
+    if (strcmp("tcp", prov_name) == 0)
+        return TCM_TID_TCP;
+    return TCM_TID_INVALID;
 }
 
 static inline char * id_to_prov_name(tcm_tid id) {
@@ -107,6 +109,8 @@ static inline char * id_to_prov_name(tcm_tid id) {
             return strdup("tcp;ofi_rxm");
         case TCM_TID_VERBS_RXM:
             return strdup("verbs;ofi_rxm");
+        case TCM_TID_TCP:
+            return strdup("tcp");
         default:
             errno = EINVAL;
             return 0;
@@ -119,6 +123,8 @@ static inline const char * id_to_prov_name_static(tcm_tid id) {
             return "tcp;ofi_rxm";
         case TCM_TID_VERBS_RXM:
             return "verbs;ofi_rxm";
+        case TCM_TID_TCP:
+            return "tcp";
         default:
             return "unknown";
     }
@@ -135,6 +141,16 @@ struct tcm_addr_inet {
     tcm_addr_inet(uint32_t addr, uint16_t port) {
         this->addr = addr;
         this->port = port;
+    }
+};
+
+struct tcm_addr_inet6 {
+    uint8_t  addr[16];
+    uint16_t port;
+    tcm_addr_inet6() { return; }
+    tcm_addr_inet6(in6_addr * addr_, uint16_t port_) {
+        memcpy((void *) addr, (void *) addr_->s6_addr, 16);
+        port = port_;
     }
 };
 
@@ -231,18 +247,19 @@ struct tcm_msg_metadata_req {
 struct tcm_msg_metadata_resp {
     struct tcm_msg_header  common;
     struct tcm_msg_version version;
-    uint16_t               fabric_major;
-    uint16_t               fabric_minor;
+    uint32_t               fabric_min;
+    uint32_t               fabric_max;
     tcm_addr_fmt           addr_fmt;
-    tcm_tid                tid;
-    tcm_msg_metadata_resp(uint32_t fabric_version_, tcm_addr_fmt addr_fmt_,
-                          tcm_tid tid_, tcm_token token_) {
-        common       = tcm_msg_header(TCM_MSG_METADATA_RESP, token_);
-        version      = tcm_msg_version(1);
-        fabric_major = FI_MAJOR(fabric_version_);
-        fabric_minor = FI_MINOR(fabric_version_);
-        addr_fmt     = addr_fmt_;
-        tid          = tid_;
+    tcm_tid                tids;
+    tcm_msg_metadata_resp(uint32_t fabric_min_, uint32_t fabric_max_,
+                          tcm_addr_fmt addr_fmt_, tcm_tid tids_,
+                          tcm_token token_) {
+        common     = tcm_msg_header(TCM_MSG_METADATA_RESP, token_);
+        version    = tcm_msg_version(1);
+        fabric_max = fabric_max_;
+        fabric_min = fabric_min_;
+        addr_fmt   = addr_fmt_;
+        tids       = tids_;
     }
 };
 
@@ -261,12 +278,11 @@ struct tcm_msg_status {
 struct tcm_msg_conn_req {
     struct tcm_msg_header  common;
     struct tcm_msg_version version;
-    uint16_t               fabric_major; // Libfabric major version
-    uint16_t               fabric_minor; // Libfabric minor version
-    tcm_tid                tid;          // Transport ID
-    tcm_addr_fmt           addr_fmt;     // Address format
-    uint16_t               addr_len;     // Address length
-    uint8_t                addr[0];      // Variable length address data
+    uint32_t               fabric_version; // Libfabric version
+    tcm_tid                tid;            // Transport ID
+    tcm_addr_fmt           addr_fmt;       // Address format
+    uint16_t               addr_len;       // Address length
+    uint8_t                addr[0];        // Variable length address data
 };
 
 struct tcm_msg_conn_resp {
@@ -288,13 +304,12 @@ struct tcm_msg_conn_req_ipv4 {
     tcm_msg_conn_req_ipv4() { return; }
     tcm_msg_conn_req_ipv4(uint16_t token_, struct sockaddr_in * addr_,
                           uint32_t fabric_version_, uint16_t tid_) {
-        cr.common       = tcm_msg_header(TCM_MSG_CONN_REQ, token_);
-        cr.version      = tcm_msg_version(1);
-        cr.fabric_major = FI_MAJOR(fabric_version_);
-        cr.fabric_minor = FI_MINOR(fabric_version_);
-        cr.addr_fmt     = TCM_AF_INET;
-        cr.addr_len     = sizeof(struct tcm_addr_inet);
-        cr.tid          = tid_;
+        cr.common         = tcm_msg_header(TCM_MSG_CONN_REQ, token_);
+        cr.version        = tcm_msg_version(1);
+        cr.fabric_version = fabric_version_;
+        cr.addr_fmt       = TCM_AF_INET;
+        cr.addr_len       = sizeof(tcm_addr_inet);
+        cr.tid            = tid_;
         addr = tcm_addr_inet(addr_->sin_addr.s_addr, addr_->sin_port);
     }
 };
@@ -304,7 +319,7 @@ struct tcm_msg_conn_resp_ipv4 {
     tcm_addr_inet            addr;
     tcm_msg_conn_resp_ipv4();
     tcm_msg_conn_resp_ipv4(uint16_t token_, uint16_t tid_,
-                           struct sockaddr_in * addr_) {
+                           sockaddr_in * addr_) {
         cr.common   = tcm_msg_header(TCM_MSG_CONN_RESP, token_);
         cr.version  = tcm_msg_version(1);
         cr.addr_fmt = TCM_AF_INET;
@@ -323,7 +338,7 @@ struct tcm_msg_fabric_ping {
     struct tcm_msg_header  common;
     struct tcm_msg_version version;
     uint8_t                direction;
-    tcm_msg_fabric_ping();
+    tcm_msg_fabric_ping() { return; }
     tcm_msg_fabric_ping(uint16_t token_, uint8_t direction_) {
         common    = tcm_msg_header(TCM_MSG_FABRIC_PING, token_);
         version   = tcm_msg_version(1);

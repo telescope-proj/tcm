@@ -40,7 +40,7 @@ struct tcm_time {
         return;
     }
 
-    /* Relative timeout */
+    /* Relative timeout, -1 = infinite timeout */
     tcm_time(int64_t timeout_ms, int64_t interval_us) {
         if (timeout_ms == 0)
             this->mode = TCM_TIME_MODE_SINGLE;
@@ -55,6 +55,14 @@ struct tcm_time {
     tcm_time(struct timespec * deadline) {
         this->mode = TCM_TIME_MODE_ABSOLUTE;
         this->ts   = *deadline;
+    }
+
+    void unset() {
+        this->mode = TCM_TIME_MODE_INVALID;
+        this->timeout = 0;
+        this->interval = 0;
+        this->ts.tv_sec = 0;
+        this->ts.tv_nsec = 0;
     }
 };
 

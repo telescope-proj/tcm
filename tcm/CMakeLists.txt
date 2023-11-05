@@ -7,11 +7,11 @@ set(SOURCES
   src/tcm_errno.cpp
   src/tcm_beacon.cpp
   src/tcm_fabric.cpp
-  src/tcm_fabric_conn.cpp
   src/tcm_fabric_cq.cpp
   src/tcm_fabric_peer.cpp
   src/tcm_fabric_shared.cpp
-  src/tcm_fabric_xfer.cpp
+  src/tcm_endpoint.cpp
+  src/tcm_conn.cpp
   src/tcm_mem.cpp
   src/tcm_mm.cpp
   src/tcm_msg.cpp

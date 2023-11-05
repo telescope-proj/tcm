@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Telescope Connection Manager
+// Copyright (c) 2023 Tim Dettmar
+
 #ifndef TCM_COMPAT_NET_H_
 #define TCM_COMPAT_NET_H_
 

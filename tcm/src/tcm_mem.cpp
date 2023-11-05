@@ -4,6 +4,8 @@
 
 #include "tcm_fabric.h"
 
+using std::shared_ptr;
+
 void tcm_mem::clear_fields() {
     this->ptr       = 0;
     this->len       = 0;
@@ -26,7 +28,14 @@ void tcm_mem::free_mgd_mem() {
     this->ptr = 0;
 }
 
-tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, uint64_t size) {
+uint64_t tcm_mem::get_offset(void * ptr) {
+    int64_t diff = (int64_t) ptr - (int64_t) this->get_ptr();
+    if (diff < 0 || diff > (int64_t) this->get_len())
+        return (uint64_t) -1;
+    return diff;
+}
+
+tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size) {
     this->clear_fields();
     this->ptr = tcm_mem_align_page(size);
     if (!this->ptr) {
@@ -38,8 +47,7 @@ tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, uint64_t size) {
     this->refresh_mr(this->ptr, this->len, FI_SEND | FI_RECV, 0);
 }
 
-tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, uint64_t size,
-                 uint64_t acs) {
+tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size, uint64_t acs) {
     this->clear_fields();
     this->ptr = tcm_mem_align_page(size);
     if (!this->ptr) {
@@ -51,7 +59,7 @@ tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, uint64_t size,
     this->refresh_mr(this->ptr, this->len, acs, 0);
 }
 
-tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
+tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
                  uint8_t own) {
     this->clear_fields();
     this->len    = len;
@@ -60,7 +68,7 @@ tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
     this->refresh_mr(ptr, len, FI_SEND | FI_RECV, 0);
 }
 
-tcm_mem::tcm_mem(std::shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
+tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
                  uint64_t acs, uint8_t own) {
     this->clear_fields();
     this->len    = len;
@@ -74,6 +82,8 @@ tcm_mem::~tcm_mem() {
     this->free_mgd_mem();
     this->parent = 0;
 }
+
+void * tcm_mem::operator*() { return this->ptr; }
 
 void * tcm_mem::get_ptr() { return this->ptr; }
 
@@ -111,15 +121,34 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
         throw ENOBUFS;
     if (this->mr)
         throw EINVAL;
-    fid_domain * d =
-        (fid_domain *) this->parent.get()->_get_fi_resource(TCM_RESRC_DOMAIN);
-    assert(d);
-    int ret = fi_mr_reg(d, this->ptr, this->len, acs, 0, 0, flags, &this->mr,
-                        (void *) this);
-    if (ret != 0)
-        throw tcm_abs(ret);
-    tcm__log_trace("Registered MR:  %p, key %lu", this->ptr,
-                   fi_mr_key(this->mr));
+    /* Some providers, notably the TCP provider, ignore the FI_MR_PROV_KEY
+     * attribute for MR registration and require the user to provide unique
+     * rkeys, while the Verbs provider cannot accept user-provided rkeys. We
+     * first try to let the provider choose an rkey, and if it returns
+     * -FI_ENOKEY, try a couple domain-unique rkey values. This allows for
+     * migration away from the deprecated FI_MR_BASIC memory registration mode.
+     */
+    int ret = -1;
+    for (int att = 0; att < 256; att++) {
+        uint64_t rkey_counter;
+        if (att == 0) {
+            rkey_counter = 0;
+        } else {
+            rkey_counter = ++this->parent->top->rkey_counter;
+        }
+        int ret =
+            fi_mr_reg(this->parent->top->domain, this->ptr, this->len, acs, 0,
+                      rkey_counter, flags, &this->mr, (void *) this);
+        if (ret == 0) {
+            tcm__log_trace("Registered MR:  %p, key %lu", this->ptr,
+                           fi_mr_key(this->mr));
+            return;
+        }
+        if (ret == -FI_ENOKEY)
+            continue;
+        throw ret;
+    }
+    throw ret;
 }
 
 void tcm_mem::dereg_internal_buffer() {
