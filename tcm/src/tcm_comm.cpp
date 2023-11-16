@@ -56,7 +56,7 @@ int sys_to_fabric_af(int af) {
     }
 }
 
-int ntop(void * addr, char * host, char * port, size_t * host_size) {
+int ntop(const void * addr, char * host, char * port, size_t * host_size) {
     if (!addr)
         return -EINVAL;
     int sa_size = get_sa_size((sockaddr *) addr);
@@ -105,7 +105,8 @@ int ntop(void * addr, char * host, char * port, size_t * host_size) {
             }
             break;
         default:
-            assert(false);
+            // todo af_ib
+            return -EPROTONOSUPPORT;
     }
     assert(ptr);
 
@@ -118,6 +119,57 @@ int ntop(void * addr, char * host, char * port, size_t * host_size) {
         return -errno;
 
     return 0;
+}
+
+int pton(const char * host, const char * port, void * addr,
+         size_t * addr_size) {
+    if (!host && !port)
+        return -EINVAL;
+    if (!addr || !addr_size)
+        return -EINVAL;
+
+    uint16_t p = 0;
+    if (port) {
+        long pt = strtol(port, nullptr, 10);
+        if (pt <= 0 || pt >= 65535) {
+            return -EINVAL;
+        }
+        p = (uint16_t) pt;
+    }
+
+    int     af = AF_INET;
+    in_addr ia;
+    if (inet_pton(af, host, &ia) == 1) {
+        if (*addr_size < sizeof(sockaddr_in)) {
+            *addr_size = sizeof(sockaddr_in);
+            return -ENOBUFS;
+        }
+        sockaddr_in * sa = reinterpret_cast<sockaddr_in *>(addr);
+        memset(sa, 0, sizeof(*sa));
+        sa->sin_family      = AF_INET;
+        sa->sin_port        = htons(p);
+        sa->sin_addr.s_addr = ia.s_addr;
+        return 0;
+    }
+
+    af = AF_INET6;
+    in6_addr ia6;
+    if (inet_pton(af, host, &ia6) == 1) {
+        if (*addr_size < sizeof(sockaddr_in6)) {
+            *addr_size = sizeof(sockaddr_in6);
+            return -ENOBUFS;
+        }
+        sockaddr_in6 * sa = reinterpret_cast<sockaddr_in6 *>(addr);
+        memset(sa, 0, sizeof(*sa));
+        sa->sin6_family = AF_INET6;
+        sa->sin6_addr   = ia6;
+        sa->sin6_port   = htons(p);
+        return 0;
+    }
+
+    // todo af_ib
+
+    return -EPROTONOSUPPORT;
 }
 
 } // namespace tcm_internal
