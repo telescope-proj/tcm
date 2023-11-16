@@ -8,6 +8,7 @@
 #include <rdma/fi_cm.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <stdio.h>
 
 #include "compat/tcmc_os.h"
 
@@ -15,7 +16,7 @@
 
 #include <winsock2.h>
 
-#define tcm_sock SOCKET
+typedef SOCKET tcm_sock;
 #define tcm_last_sock_err WSAGetLastError()
 #define tcm_sock_valid(x) (x != INVALID_SOCKET)
 #define tcm_sock_close(x) closesocket(x)
@@ -36,7 +37,7 @@ static inline int tcm_sock_poll(struct pollfd * pfd, unsigned long fds,
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define tcm_sock int
+typedef int tcm_sock;
 #define tcm_last_sock_err errno
 #define tcm_sock_valid(x) (x > 0)
 #define tcm_sock_close(x) close(x)

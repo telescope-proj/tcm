@@ -4,6 +4,8 @@
 
 #include "tcm_fabric.h"
 
+#define KEY_SIZE_LIMIT 1024
+
 using std::shared_ptr;
 
 void tcm_mem::clear_fields() {
@@ -11,15 +13,18 @@ void tcm_mem::clear_fields() {
     this->len       = 0;
     this->alignment = 0;
     this->mr        = 0;
-    this->own       = 0;
+    this->mode      = TCM_MEM_UNMANAGED;
+    this->key_buf   = 0;
+    this->key_size  = 8;
+    this->parent    = 0;
 }
 
 void tcm_mem::free_mgd_mem() {
-    switch (this->own) {
-        case 1:
+    switch (this->mode) {
+        case TCM_MEM_PLAIN:
             free(this->ptr);
             break;
-        case 2:
+        case TCM_MEM_PLAIN_ALIGNED:
             tcm_mem_free(this->ptr);
             break;
         default:
@@ -42,7 +47,7 @@ tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size) {
         throw errno;
     }
     this->len    = size;
-    this->own    = 2;
+    this->mode   = TCM_MEM_PLAIN_ALIGNED;
     this->parent = fabric;
     this->refresh_mr(this->ptr, this->len, FI_SEND | FI_RECV, 0);
 }
@@ -54,30 +59,32 @@ tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size, uint64_t acs) {
         throw errno;
     }
     this->len    = size;
-    this->own    = 2;
+    this->mode   = TCM_MEM_PLAIN_ALIGNED;
     this->parent = fabric;
     this->refresh_mr(this->ptr, this->len, acs, 0);
 }
 
 tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
-                 uint8_t own) {
+                 tcm_mem_bind mode) {
     this->clear_fields();
     this->len    = len;
-    this->own    = own;
+    this->mode   = mode;
     this->parent = fabric;
     this->refresh_mr(ptr, len, FI_SEND | FI_RECV, 0);
 }
 
 tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, void * ptr, uint64_t len,
-                 uint64_t acs, uint8_t own) {
+                 uint64_t acs, tcm_mem_bind mode) {
     this->clear_fields();
     this->len    = len;
-    this->own    = own;
+    this->mode   = mode;
     this->parent = fabric;
     this->refresh_mr(ptr, len, acs, 0);
 }
 
 tcm_mem::~tcm_mem() {
+    tcm_free_unset(this->key_buf);
+    this->key_size = 0;
     this->dereg_internal_buffer();
     this->free_mgd_mem();
     this->parent = 0;
@@ -87,13 +94,38 @@ void * tcm_mem::operator*() { return this->ptr; }
 
 void * tcm_mem::get_ptr() { return this->ptr; }
 
-struct fid_mr * tcm_mem::get_mr() { return this->mr; }
+fid_mr * tcm_mem::get_mr() { return this->mr; }
 
 void * tcm_mem::get_mr_desc() { return fi_mr_desc(this->mr); }
 
 uint64_t tcm_mem::get_len() { return this->len; }
 
-int tcm_mem::_check_parent(tcm_fabric * p) { return this->parent.get() == p; }
+int tcm_mem::get_rkey(uint64_t * buf) {
+    uint64_t key = fi_mr_key(this->mr);
+    if (key == FI_KEY_NOTAVAIL)
+        return -FI_ETOOSMALL;
+    *buf = key;
+    return 0;
+}
+
+int tcm_mem::get_rkey_long(void * buf, size_t * size) {
+    uint64_t key = fi_mr_key(this->mr);
+    if (key != FI_KEY_NOTAVAIL) {
+        if (*size < 8) {
+            *size = 8;
+            return -FI_ETOOSMALL;
+        }
+        *(uint64_t *) buf = key;
+        return 0;
+    }
+    if (this->key_buf && this->key_size <= *size) {
+        memcpy(buf, this->key_buf, this->key_size);
+        return 1;
+    }
+    return -FI_ETOOSMALL;
+}
+
+bool tcm_mem::check_parent(tcm_fabric * p) { return this->parent.get() == p; }
 
 void tcm_mem::refresh_mr(void * ptr, uint64_t len) {
     this->refresh_mr(ptr, len, FI_SEND | FI_RECV, 0);
@@ -102,9 +134,8 @@ void tcm_mem::refresh_mr(void * ptr, uint64_t len) {
 void tcm_mem::refresh_mr(void * ptr, uint64_t len, uint64_t acs,
                          uint64_t flags) {
     this->dereg_internal_buffer();
-    if (this->own && this->ptr != ptr) {
-        free(this->ptr);
-    }
+    if (this->ptr != ptr)
+        this->free_mgd_mem();
     this->ptr = ptr;
     this->len = len;
     this->reg_internal_buffer(acs, flags);
@@ -121,6 +152,10 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
         throw ENOBUFS;
     if (this->mr)
         throw EINVAL;
+
+    tcm_free_unset(this->key_buf);
+    this->key_size = 0;
+
     /* Some providers, notably the TCP provider, ignore the FI_MR_PROV_KEY
      * attribute for MR registration and require the user to provide unique
      * rkeys, while the Verbs provider cannot accept user-provided rkeys. We
@@ -140,15 +175,46 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
             fi_mr_reg(this->parent->top->domain, this->ptr, this->len, acs, 0,
                       rkey_counter, flags, &this->mr, (void *) this);
         if (ret == 0) {
-            tcm__log_trace("Registered MR:  %p, key %lu", this->ptr,
-                           fi_mr_key(this->mr));
+            /* In order want to support providers with long remote access keys,
+             * 
+             */
+            uint64_t rkey = fi_mr_key(this->mr);
+            if (rkey == FI_KEY_NOTAVAIL) {
+                this->key_size = 0;
+                uint64_t base  = 0;
+                ret = fi_mr_raw_attr(this->mr, &base, nullptr, &this->key_size,
+                                     0);
+                if (ret != -FI_ETOOSMALL) {
+                    tcm__log_trace("Failed to get raw key: %s",
+                                   fi_strerror(-ret));
+                    throw ret;
+                }
+                if (this->key_size > KEY_SIZE_LIMIT) {
+                    throw ENOBUFS;
+                }
+                this->key_buf = (uint8_t *) calloc(1, this->key_size);
+                if (!this->key_buf) {
+                    throw ENOMEM;
+                }
+                ret = fi_mr_raw_attr(this->mr, &base, this->key_buf,
+                                     &this->key_size, 0);
+                if (ret < 0) {
+                    tcm__log_trace("Failed to get raw key: %s",
+                                   fi_strerror(-ret));
+                    tcm_free_unset(this->key_buf);
+                    throw ret;
+                }
+            } else {
+                this->key_buf  = 0;
+                this->key_size = 8;
+            }
             return;
         }
         if (ret == -FI_ENOKEY)
             continue;
-        throw ret;
+        throw tcm_abs(ret);
     }
-    throw ret;
+    throw tcm_abs(ret);
 }
 
 void tcm_mem::dereg_internal_buffer() {
@@ -156,6 +222,10 @@ void tcm_mem::dereg_internal_buffer() {
         int ret = fi_close(&this->mr->fid);
         if (ret != 0)
             throw ret;
+        this->mr = 0;
     }
-    this->mr = 0;
+    if (this->key_buf) {
+        tcm_free_unset(this->key_buf);
+    }
+    this->key_size = 0;
 }

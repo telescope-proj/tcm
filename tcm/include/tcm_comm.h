@@ -6,20 +6,16 @@
 #define TCM_COMM_H_
 
 #include "compat/tcmc_net.h"
+#include <infiniband/ib.h>
 
 #define TCM_MAGIC 0x52415054
 namespace tcm_internal {
 
-static inline int get_sa_size(struct sockaddr * sa) {
-    switch (sa->sa_family) {
-        case AF_INET:
-            return sizeof(struct sockaddr_in);
-        case AF_INET6:
-            return sizeof(struct sockaddr_in6);
-        default:
-            return 0;
-    }
-}
+int  get_sa_size(sockaddr * sa);
+bool check_af_support(unsigned int sa_family);
+int  fabric_to_sys_af(uint32_t af);
+int  sys_to_fabric_af(int af);
+int  ntop(void * addr, char * host, char * port, size_t * host_size);
 
 } // namespace tcm_internal
 

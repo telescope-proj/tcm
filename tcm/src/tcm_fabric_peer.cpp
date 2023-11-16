@@ -37,6 +37,7 @@ int tcm_fabric::remove_peer(fi_addr_t peer) {
 int tcm_fabric::lookup_peer(fi_addr_t peer, sockaddr * out, size_t * size) {
     assert(out);
     assert(size);
-    int ret;
+    if (peer == FI_ADDR_UNSPEC)
+        return -EINVAL;
     return fi_av_lookup(this->av, peer, (void*) out, size);
 }

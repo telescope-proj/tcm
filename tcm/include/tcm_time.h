@@ -66,8 +66,10 @@ struct tcm_time {
     }
 };
 
+#define TCM_TIME_NULL ((tcm_time*) nullptr)
+
 int64_t tcm_time_sleep(tcm_time * t, bool interruptable);
-void    tcm_get_abs_time(tcm_time * tt, struct timespec * ts);
+void    tcm_get_abs_time(const tcm_time * tt, timespec * ts);
 
 static inline tcm_time tcm_time_select(tcm_time * param, tcm_time * default_) {
     tcm_time out;

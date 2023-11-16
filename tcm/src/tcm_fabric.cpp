@@ -12,6 +12,66 @@
 
 using std::shared_ptr;
 
+namespace tcm_internal {
+
+size_t BASIC_PAGE_SIZE = 0;
+size_t HUGE_PAGE_SIZE  = 0;
+size_t MLOCK_LIMIT     = 0;
+
+} // namespace tcm_internal
+
+/* --- Initialization --- */
+
+int tcm_init(tcm_init_param * p) {
+    (void) p;
+#ifdef __linux__
+    const char * log_level = getenv("TCM_LOG_LEVEL");
+    if (!log_level) {
+        tcm__log_set_level(TCM__LOG_FATAL);
+    } else {
+        if (strcmp(log_level, "trace") == 0) {
+            tcm__log_set_level(TCM__LOG_TRACE);
+        } else if (strcmp(log_level, "debug") == 0) {
+            tcm__log_set_level(TCM__LOG_DEBUG);
+        } else if (strcmp(log_level, "info") == 0) {
+            tcm__log_set_level(TCM__LOG_INFO);
+        } else if (strcmp(log_level, "warn") == 0) {
+            tcm__log_set_level(TCM__LOG_WARN);
+        } else if (strcmp(log_level, "error") == 0) {
+            tcm__log_set_level(TCM__LOG_ERROR);
+        } else if (strcmp(log_level, "fatal") == 0) {
+            tcm__log_set_level(TCM__LOG_FATAL);
+        }
+    }
+    setenv("FI_UNIVERSE_SIZE", "4", 0);
+    tcm_internal::BASIC_PAGE_SIZE = tcm_get_page_size();
+    FILE * f                      = fopen("/proc/meminfo", "r");
+    if (!f) {
+        tcm__log_warn("Could not open /proc/meminfo");
+    } else {
+        char buf[128];
+        while (fgets(buf, sizeof(buf), f)) {
+            size_t hps = 0;
+            if (sscanf(buf, "Hugepagesize: %lu kB", &hps) == 1) {
+                tcm_internal::HUGE_PAGE_SIZE = hps * 1024;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    struct rlimit lim;
+    int           ret = getrlimit(RLIMIT_MEMLOCK, &lim);
+    if (ret < 0) {
+        tcm__log_warn("Could not get memlock limit: %s", strerror(errno));
+    } else {
+        tcm_internal::MLOCK_LIMIT = lim.rlim_cur;
+    }
+#else
+    return -ENOSYS;
+#endif
+    return 0;
+}
+
 /* --- Fabric Management --- */
 
 void tcm_fabric::bind_exit_flag(volatile int * flag) { this->exit_flag = flag; }
@@ -53,14 +113,7 @@ int tcm_fabric::init_fabric_domain(uint32_t version, uint64_t flags,
 
     /* Add the features required by the fabric abstraction, overwriting if
        the user provided something different */
-
-    hints->ep_attr->type = FI_EP_RDM;
-    hints->domain_attr->mr_mode =
-        FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_LOCAL;
-    hints->mode |= FI_RX_CQ_DATA | FI_LOCAL_MR;
-    hints->caps |= FI_MSG | FI_RMA | FI_TAGGED;
-    hints->tx_attr->caps |= FI_MSG | FI_RMA | FI_TAGGED;
-    hints->rx_attr->caps |= FI_MSG | FI_RMA | FI_TAGGED;
+    tcm_internal::merge_tcm_hints(hints);
 
     if (no_getinfo) {
         fi = hints;
@@ -125,7 +178,8 @@ err_fabric:
 }
 
 int tcm_fabric::init(shared_ptr<tcm_internal::shared_fi> shrd,
-                     tcm_time *                               timeout) {
+                     tcm_time *                          timeout) {
+    using tcm_internal::prov_name_to_tid;
     int ret;
 
     if (shrd)
@@ -146,36 +200,6 @@ int tcm_fabric::init(shared_ptr<tcm_internal::shared_fi> shrd,
         this->timeout.ts.tv_nsec = 0;
     }
 
-    /* Try to create the CQ with different wait objects */
-    tcm__log_debug("CQ size: %lu entries", this->fi->tx_attr->size);
-    fi_wait_obj modes[] = {FI_WAIT_FD, FI_WAIT_UNSPEC, FI_WAIT_NONE};
-    fi_cq_attr  cq_attr;
-    memset(&cq_attr, 0, sizeof(cq_attr));
-    cq_attr.size      = this->fi->tx_attr->size;
-    cq_attr.format    = FI_CQ_FORMAT_TAGGED;
-    cq_attr.wait_cond = FI_CQ_COND_NONE;
-    bool flag         = 0;
-    for (unsigned int i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
-        tcm__log_trace("Trying CQ wait mode %d", modes[i]);
-        cq_attr.wait_obj = modes[i];
-        ret = fi_cq_open(this->top->domain, &cq_attr, &this->cq, NULL);
-        if (ret < 0) {
-            tcm__log_trace("Error creating TX CQ: %s",
-                           fi_strerror(tcm_abs(ret)));
-            continue;
-        }
-        flag = 1;
-        break;
-    }
-
-    if (!flag) {
-        tcm__log_error("All CQ creation attempts failed");
-        goto err_fabric;
-    }
-
-    this->wait_type = cq_attr.wait_obj;
-    tcm__log_debug("CQ created with wait mode %d", this->wait_type);
-
     fi_av_attr av_attr;
     memset(&av_attr, 0, sizeof(av_attr));
     av_attr.type  = FI_AV_UNSPEC;
@@ -195,7 +219,7 @@ int tcm_fabric::init(shared_ptr<tcm_internal::shared_fi> shrd,
             sizeof(this->prov_name) - 1);
     this->proto        = this->fi->ep_attr->protocol;
     this->addr_fmt     = this->fi->addr_format;
-    this->transport_id = prov_name_to_id(this->fi->fabric_attr->prov_name);
+    this->transport_id = prov_name_to_tid(this->fi->fabric_attr->prov_name);
 
     tcm__log_debug("Resources created");
     return 0;
@@ -284,51 +308,3 @@ void * tcm_fabric::_get_fi_resource(tcm_fabric_resource res) {
 }
 
 tcm_tid tcm_fabric::_get_tid() { return this->transport_id; }
-
-int tcm_serialize_addr(void * addr, int addr_len, uint32_t addr_fmt,
-                       void * out_buf, int * buf_size) {
-    if (!addr || !addr_len || !out_buf || !buf_size || !*buf_size)
-        return -EINVAL;
-
-    switch (addr_fmt) {
-        default:
-            return -EINVAL;
-        case FI_SOCKADDR_IN:
-            if (*buf_size < 6) {
-                *buf_size = 6;
-                return -ENOBUFS;
-            }
-            sockaddr_in * sai = (sockaddr_in *) addr;
-            if (sai->sin_family != AF_INET)
-                return -EINVAL;
-
-            tcm_addr_inet * inet = (tcm_addr_inet *) out_buf;
-            inet->addr           = sai->sin_addr.s_addr;
-            inet->port           = sai->sin_port;
-            *buf_size            = sizeof(tcm_addr_inet);
-            return TCM_AF_INET;
-    }
-}
-
-int tcm_deserialize_addr(void * addr, int addr_len, uint32_t addr_fmt,
-                         void * out_buf, int * buf_size) {
-    if (!addr || !addr_len || !out_buf || !buf_size || !*buf_size)
-        return -EINVAL;
-
-    switch (addr_fmt) {
-        default:
-            return -EINVAL;
-        case TCM_AF_INET:
-            if (*buf_size < (int) sizeof(sockaddr_in)) {
-                *buf_size = (int) sizeof(sockaddr_in);
-                return -ENOBUFS;
-            }
-            sockaddr_in *   sai  = (sockaddr_in *) out_buf;
-            tcm_addr_inet * inet = (tcm_addr_inet *) addr;
-            sai->sin_family      = AF_INET;
-            sai->sin_addr.s_addr = inet->addr;
-            sai->sin_port        = inet->port;
-            *buf_size            = sizeof(sockaddr_in);
-            return FI_SOCKADDR_IN;
-    }
-}

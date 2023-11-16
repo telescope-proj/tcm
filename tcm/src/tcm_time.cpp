@@ -4,7 +4,7 @@
 
 #include "tcm_time.h"
 
-int64_t tcm_time_sleep(tcm_time * t, bool interruptable) {
+int64_t tcm_time_sleep(const tcm_time * t, bool interruptable) {
     assert(t);
     if (t->mode == TCM_TIME_MODE_SINGLE)
         return 0;
@@ -52,7 +52,7 @@ int64_t tcm_time_sleep(tcm_time * t, bool interruptable) {
     }
 }
 
-void tcm_get_abs_time(tcm_time * tt, struct timespec * ts) {
+void tcm_get_abs_time(const tcm_time * tt, timespec * ts) {
     assert(tt);
     assert(ts);
     switch (tt->mode) {

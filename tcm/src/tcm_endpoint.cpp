@@ -44,10 +44,13 @@ void tcm_endpoint::bind_exit_flag(volatile int * exit_flag) {
 }
 
 void tcm_endpoint::clear_fields() {
+    this->cq          = 0;
+    this->rx_cq       = 0;
     this->fabric      = 0;
     this->ep          = 0;
     this->src_addr    = 0;
     this->src_addrlen = 0;
+    this->exit_flag   = 0;
     this->timeout.unset();
 }
 
@@ -60,25 +63,30 @@ tcm_endpoint::~tcm_endpoint() {
     this->fabric      = 0;
 }
 
-tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
-                           tcm_time * timeo) {
-    this->clear_fields();
+int tcm_endpoint::init(shared_ptr<tcm_fabric> fab, sockaddr * addr,
+                       tcm_time * timeo, shared_ptr<tcm_cq> cq,
+                       shared_ptr<tcm_cq> rx_cq) {
+    ssize_t   ret;
+    fi_info * info = 0;
+    assert(cq.get());
+    this->unified_cq = (rx_cq.get() == 0);
     if (timeo)
         this->timeout = *timeo;
     else
         this->timeout = tcm_time(3000, 500);
-
-    ssize_t      ret;
-    fi_info *     info = 0;
-    sockaddr_in * sa   = 0;
 
     if (addr) {
         info = fi_dupinfo(fab->fi);
         if (!info)
             throw ENOMEM;
         tcm_free_unset(info->src_addr);
+        int sa_size = tcm_internal::get_sa_size(addr);
+        if (sa_size < 0) {
+            ret = sa_size;
+            goto err;
+        }
         info->src_addr = malloc(sizeof(sockaddr_in));
-        memcpy((void*)info->src_addr, addr, sizeof(sockaddr_in));
+        memcpy((void *) info->src_addr, addr, sizeof(sockaddr_in));
         info->src_addrlen = sizeof(sockaddr_in);
     } else {
         info = fab->fi;
@@ -95,11 +103,30 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
         tcm__log_error("Error binding AV to endpoint: %s", fi_strerror(-ret));
         goto err;
     }
-    ret = fi_ep_bind(this->ep, &fab->cq->fid, FI_TRANSMIT | FI_RECV);
-    if (ret < 0) {
-        tcm__log_error("Error binding RX CQ to endpoint: %s",
-                       fi_strerror(tcm_abs(ret)));
-        goto err;
+
+    if (this->unified_cq) {
+        ret = fi_ep_bind(this->ep, &cq->cq->fid, FI_TRANSMIT | FI_RECV);
+        if (ret < 0) {
+            tcm__log_error("Error binding CQ to endpoint: %s",
+                           fi_strerror(tcm_abs(ret)));
+            goto err;
+        }
+        this->cq = cq;
+    } else {
+        ret = fi_ep_bind(this->ep, &cq->cq->fid, FI_TRANSMIT);
+        if (ret < 0) {
+            tcm__log_error("Error binding TX CQ to endpoint: %s",
+                           fi_strerror(tcm_abs(ret)));
+            goto err;
+        }
+        ret = fi_ep_bind(this->ep, &rx_cq->cq->fid, FI_RECV);
+        if (ret < 0) {
+            tcm__log_error("Error binding RX CQ to endpoint: %s",
+                           fi_strerror(tcm_abs(ret)));
+            goto err;
+        }
+        this->cq    = cq;
+        this->rx_cq = cq;
     }
 
     if (addr) {
@@ -108,6 +135,17 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
             tcm__log_error("Failed to set local address: %s",
                            fi_strerror(tcm_abs(ret)));
             goto err;
+        }
+        char   host[INET6_ADDRSTRLEN];
+        char   port[6];
+        size_t size    = sizeof(host);
+        int    sa_size = tcm_internal::get_sa_size((sockaddr *) addr);
+        ret            = tcm_internal::ntop(addr, host, port, &size);
+        if (ret == 0) {
+            tcm__log_debug("Set endpoint address (%d): %s:%s", sa_size, host,
+                           port);
+        } else {
+            tcm__log_debug("Could not display address");
         }
     }
 
@@ -140,32 +178,55 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
         goto err;
     }
 
-    char tmp_addr[INET_ADDRSTRLEN];
-    sa = (struct sockaddr_in *) this->src_addr;
-    tcm__log_debug("Endpoint address (%d): %s:%d", this->src_addrlen,
-                   inet_ntop(sa->sin_family,
-                             &((struct sockaddr_in *) sa)->sin_addr, tmp_addr,
-                             INET_ADDRSTRLEN),
-                   ntohs(((struct sockaddr_in *) sa)->sin_port));
-
-    if (info->addr_format == FI_SOCKADDR_IN) {
-        sa = (struct sockaddr_in *) this->src_addr;
-        if (sa->sin_family != AF_INET || sa->sin_port == 0) {
-            tcm__log_error("Invalid address family (%d) or port (%d)",
-                           sa->sin_family, sa->sin_port);
-            goto err;
+    {
+        tcm__log_debug("len: %d, ret: %d", this->src_addrlen, ret);
+        char   host[INET6_ADDRSTRLEN];
+        char   port[6];
+        size_t size    = sizeof(host);
+        int    sa_size = tcm_internal::get_sa_size((sockaddr *) this->src_addr);
+        ret            = tcm_internal::ntop(this->src_addr, host, port, &size);
+        if (ret == 0) {
+            tcm__log_debug("Endpoint address (%d): %s:%s", sa_size, host, port);
+        } else {
+            tcm__log_debug("Unable to display fabric address");
         }
     }
 
     this->fabric = fab;
-    return;
+    return 0;
 
 err:
     if (addr && info) {
         fi_freeinfo(info);
     }
     this->~tcm_endpoint();
-    throw -ret;
+    return ret;
+}
+
+tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
+                           tcm_time * timeo) {
+    this->clear_fields();
+    shared_ptr<tcm_cq> icq = make_shared<tcm_cq>(fab, 128);
+    int                ret = this->init(fab, addr, timeo, icq, 0);
+    if (ret < 0)
+        throw -ret;
+}
+
+tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
+                           tcm_time * timeo, shared_ptr<tcm_cq> cq_) {
+    this->clear_fields();
+    int ret = this->init(fab, addr, timeo, cq_, 0);
+    if (ret < 0)
+        throw -ret;
+}
+
+tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
+                           tcm_time * timeo, shared_ptr<tcm_cq> txcq,
+                           shared_ptr<tcm_cq> rxcq) {
+    this->clear_fields();
+    int ret = this->init(fab, addr, timeo, txcq, rxcq);
+    if (ret < 0)
+        throw -ret;
 }
 
 int tcm_endpoint::get_name(void * buf, size_t * buf_size) {
@@ -220,9 +281,12 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
                                      uint64_t local_offset,
                                      uint64_t remote_offset, uint64_t len,
                                      void * ctx) {
-    if (!mem._check_parent(this->fabric.get())) {
+    if (!mem.check_parent(this->fabric.get())) {
         tcm__log_error("Invalid memory region used for fabric object");
         throw EINVAL;
+    }
+    if (rmem.raw) {
+        throw ENOTSUP;
     }
 
     uint64_t rbuf    = rmem.addr + remote_offset;
@@ -234,12 +298,13 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
     if (remote_offset + len > rmem.len || remote_offset > rmem.len ||
         len > rmem.len)
         throw EINVAL;
+
     switch (type) {
         case XFER_RDMA_READ:
-            return fi_read(this->ep, buf, len, desc, peer, rbuf, rmem.rkey,
+            return fi_read(this->ep, buf, len, desc, peer, rbuf, rmem.u.rkey,
                            ctx);
         case XFER_RDMA_WRITE:
-            return fi_write(this->ep, buf, len, desc, peer, rbuf, rmem.rkey,
+            return fi_write(this->ep, buf, len, desc, peer, rbuf, rmem.u.rkey,
                             ctx);
         default:
             throw EINVAL;
@@ -249,7 +314,7 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
 ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
                                 uint64_t offset, uint64_t len, uint64_t tag,
                                 uint64_t mask, uint8_t sync, void * ctx) {
-    if (!mem._check_parent(this->fabric.get())) {
+    if (!mem.check_parent(this->fabric.get())) {
         tcm__log_error("Invalid memory region used for fabric object");
         throw EINVAL;
     }
@@ -260,6 +325,7 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
     void *   buf     = (void *) (((uint8_t *) *mem) + offset);
     uint64_t buf_len = mem.get_len();
     void *   desc    = mem.get_mr_desc();
+    int      tcat    = 0;
     /* Check individually too in case of overflow */
     if (offset + len > buf_len || offset > buf_len || len > buf_len)
         throw EINVAL;
@@ -271,16 +337,20 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
 
         switch (type) {
             case XFER_SEND:
-                ret = fi_send(this->ep, buf, len, desc, peer, ctx);
+                ret  = fi_send(this->ep, buf, len, desc, peer, ctx);
+                tcat = 0;
                 break;
             case XFER_TSEND:
-                ret = fi_tsend(this->ep, buf, len, desc, peer, tag, ctx);
+                ret  = fi_tsend(this->ep, buf, len, desc, peer, tag, ctx);
+                tcat = 0;
                 break;
             case XFER_RECV:
-                ret = fi_recv(this->ep, buf, len, desc, peer, ctx);
+                ret  = fi_recv(this->ep, buf, len, desc, peer, ctx);
+                tcat = 1;
                 break;
             case XFER_TRECV:
-                ret = fi_trecv(this->ep, buf, len, desc, peer, tag, mask, ctx);
+                ret  = fi_trecv(this->ep, buf, len, desc, peer, tag, mask, ctx);
+                tcat = 1;
                 break;
             default:
                 throw EINVAL;
@@ -305,9 +375,24 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
             return ret;
         }
 
+        tcm_cq * tcq = 0;
+        switch (tcat) {
+            case 0:
+                tcq = this->cq.get();
+                break;
+            case 1:
+                if (unified_cq)
+                    tcq = this->cq.get();
+                else
+                    tcq = this->rx_cq.get();
+                break;
+            default:
+                assert(false && "Invalid state!");
+        }
+
         tcm_time               abst(&dl);
         struct fi_cq_err_entry err;
-        ret = this->fabric->poll_cq(&err, &abst);
+        ret = tcq->spoll(&err, &err, 1, nullptr, 0, &abst);
         switch (ret) {
             case 0:
             case -FI_EAGAIN:

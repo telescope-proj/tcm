@@ -5,6 +5,8 @@
 #ifndef TCM_UTIL_H_
 #define TCM_UTIL_H_
 
+#include <stdint.h>
+
 #define tcm_abs(x) (x >= 0 ? x : -x)
 #define tcm_negabs(x) (x <= 0 ? x : -x)
 #define TCM_MAX_ADDR_LEN 128
@@ -14,26 +16,23 @@
         x = 0;                                                                 \
     } while (0);
 
-// int tcm_validate_ipv4_addr(uint32_t addr) {
-//     in_addr_t ranges[] = {
-//         inet_addr("10.0.0.0"),
-//         inet_addr("172.16.0.0"),
-//         inet_addr("192.168.0.0"),
-//         0
-//     };
+namespace tcm_internal {
 
-//     in_addr_t masks[] = {
-//         inet_addr("255.0.0.0"),
-//         inet_addr("255.240.0.0"),
-//         inet_addr("255.255.0.0"),
-//         0
-//     };
+const uint8_t bitcounts[256] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
-//     for (int i = 0; masks[i] > 0; i++) {
-//         if (ranges[i] & masks[i] == addr & masks[i])
-//             return 1;
-//     }
-//     return 0;
-// }
+static inline bool popcnt8(uint8_t data) { return bitcounts[data]; }
+
+} // namespace tcm_internal
 
 #endif
