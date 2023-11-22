@@ -216,15 +216,15 @@ int tcm_test_conns(fi_info * params, fi_info ** param_out, int flags,
                 }
                 tmp_p->src_addr = malloc(sa_size);
                 if (!tmp_p->src_addr)
-                    throw ENOMEM;
+                    throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                                        "Source address allocation failed");
                 memcpy((void *) tmp_p->src_addr, local_addr, sa_size);
                 tmp_p->src_addrlen = sa_size;
                 tmp_p->addr_format = sys_to_fabric_af(local_addr->sa_family);
             }
             f = make_shared<tcm_fabric>(opts);
-        } catch (int e) {
-            tcm__log_trace("Failed to create fabric connection: %s",
-                           fi_strerror(e));
+        } catch (std::exception & exc) {
+            tcm__log_debug("Fabric creation failed: %s", exc.what());
             if (local_addr) {
                 fi_freeinfo(tmp_p);
                 tmp_p = 0;
@@ -530,10 +530,11 @@ int tcm_accept_client_dynamic(tcm_accept_client_dynamic_param * p) {
         goto cleanup;
     }
 
-    af_sel = af_flags & msg.conn_req()->tid;
+    af_sel = af_flags & msg.conn_req()->addr_fmt;
     if (!af_sel) {
         tcm__log_debug("Failed to find common address format");
-        tcm__log_debug("Local: %d, Peer: %d", tid_flags, msg.conn_req()->tid);
+        tcm__log_debug("Local: %d, Peer: %d", af_flags,
+                       msg.conn_req()->addr_fmt);
         ret = -EBADMSG;
         goto cleanup;
     }
@@ -587,9 +588,9 @@ int tcm_accept_client_dynamic(tcm_accept_client_dynamic_param * p) {
         }
         tcm_time t(3000, 500);
         ep = make_shared<tcm_endpoint>(f, SA_CAST(pruned_addrs), &t);
-    } catch (int e) {
-        ret = -e;
-        tcm__log_error("Failed to create endpoint: %s", fi_strerror(e));
+    } catch (tcm_exception & exc) {
+        ret = -exc.return_code();
+        tcm__log_error("Failed to create endpoint: %s", exc.what());
         goto cleanup;
     }
 
@@ -623,9 +624,9 @@ int tcm_accept_client_dynamic(tcm_accept_client_dynamic_param * p) {
     /* Wait for a fabric ping */
     try {
         mem = make_shared<tcm_mem>(f, tcm_get_page_size());
-    } catch (int e) {
-        ret = -e;
-        tcm__log_error("Unable to register memory: %s", fi_strerror(e));
+    } catch (tcm_exception & exc) {
+        ret = -exc.return_code();
+        tcm__log_error("Unable to register memory: %s", exc.what());
         goto cleanup;
     }
 
@@ -742,7 +743,6 @@ int tcm_client_dynamic(tcm_client_dynamic_param * p) {
        has supported features / compatible versions ahead of time (e.g. the
        information was exchanged manually or outside the control of TCM) */
     if (!p->fast) {
-        
         *msg.c_ping()    = tcm_msg_client_ping(1);
         size_t send_size = sizeof(*msg.c_ping());
         if (p->prv_data && p->prv_data->data && p->prv_data->size) {
@@ -787,8 +787,6 @@ int tcm_client_dynamic(tcm_client_dynamic_param * p) {
         }
 
         /* Get extended metadata */
-        tcm__log_info("sending...........................................");
-
         *msg.mtd_req() = tcm_msg_metadata_req(2);
 
         mlen =
@@ -989,9 +987,9 @@ int tcm_client_dynamic(tcm_client_dynamic_param * p) {
             default:
                 assert(false);
         }
-    } catch (int e) {
-        tcm__log_error("Failed to create connection: %s", fi_strerror(e));
-        ret = -e;
+    } catch (tcm_exception & exc) {
+        ret = -exc.return_code();
+        tcm__log_error("Failed to create connection: %s", exc.what());
         goto cleanup;
     }
 
@@ -1004,8 +1002,8 @@ int tcm_client_dynamic(tcm_client_dynamic_param * p) {
         auto                  mem = tcm_mem(f, tcm_get_page_size());
         tcm_msg_fabric_ping * ping =
             reinterpret_cast<tcm_msg_fabric_ping *>(*mem);
-        *ping                       = tcm_msg_fabric_ping(0x2345, 0);
-        tcm_msg_fabric_ping *  resp = (ping + 1);
+        *ping                      = tcm_msg_fabric_ping(0x2345, 0);
+        tcm_msg_fabric_ping * resp = (ping + 1);
         memset((void *) resp, 0, pl);
 
         ret = ep->recv(mem, f_peer, CTX_CAST(1), pl, pl);
@@ -1024,7 +1022,7 @@ int tcm_client_dynamic(tcm_client_dynamic_param * p) {
 
         for (int i = 0; i < 2; i++) {
             CHECK_EXIT(p->exit_flag);
-            tcm_time t(p->timeout_ms, 0);
+            tcm_time        t(p->timeout_ms, 0);
             fi_cq_err_entry err;
             ret = cq->spoll(&err, &err, 1, nullptr, 0, &t);
             if (ret < 0) {

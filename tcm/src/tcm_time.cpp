@@ -3,6 +3,7 @@
 // Copyright (c) 2023 Tim Dettmar
 
 #include "tcm_time.h"
+#include "tcm_exception.h"
 
 int64_t tcm_time_sleep(const tcm_time * t, bool interruptable) {
     assert(t);
@@ -15,7 +16,8 @@ int64_t tcm_time_sleep(const tcm_time * t, bool interruptable) {
     if (t->mode == TCM_TIME_MODE_RELATIVE) {
         ret = clock_gettime(CLOCK_MONOTONIC, &dl);
         if (ret < 0)
-            throw errno;
+            throw tcm_exception(errno, __FILE__, __LINE__,
+                                "System clock failure");
         dl.tv_sec += t->interval / 1000000;
         dl.tv_nsec += (t->interval % 1000000) * 1000;
     } else {
@@ -26,7 +28,7 @@ int64_t tcm_time_sleep(const tcm_time * t, bool interruptable) {
     struct timespec req, rem;
     ret = clock_gettime(CLOCK_MONOTONIC, &req);
     if (ret < 0)
-        throw errno;
+        throw tcm_exception(errno, __FILE__, __LINE__, "System clock failure");
     req.tv_sec += t->interval / 1000000;
     req.tv_nsec += (t->interval % 1000000) * 1000;
     while (1) {
@@ -47,7 +49,8 @@ int64_t tcm_time_sleep(const tcm_time * t, bool interruptable) {
                     }
                 }
             default:
-                throw ret;
+                throw tcm_exception(ret, __FILE__, __LINE__,
+                                    "Unexpected sleep completion result");
         }
     }
 }
@@ -64,7 +67,8 @@ void tcm_get_abs_time(const tcm_time * tt, timespec * ts) {
             struct timespec cur;
             int             ret = clock_gettime(CLOCK_MONOTONIC, &cur);
             if (ret < 0) {
-                throw errno;
+                throw tcm_exception(errno, __FILE__, __LINE__,
+                                    "System clock failure");
             }
             ts->tv_sec  = cur.tv_sec + tt->timeout / 1000;
             ts->tv_nsec = cur.tv_nsec + (tt->timeout % 1000) * 1000000;

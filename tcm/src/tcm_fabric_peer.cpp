@@ -11,8 +11,9 @@ fi_addr_t tcm_fabric::add_peer(sockaddr * peer) {
     fi_addr_t out;
     int       ret, sas;
     sas = tcm_internal::get_sa_size(peer);
-    if (!sas)
-        throw EINVAL;
+    if (sas <= 0)
+        throw tcm_exception(-sas, __FILE__, __LINE__,
+                            "Invalid address structure");
 
     char addr[INET6_ADDRSTRLEN];
     tcm__log_debug("Adding peer to AV: %s:%d",
@@ -39,5 +40,5 @@ int tcm_fabric::lookup_peer(fi_addr_t peer, sockaddr * out, size_t * size) {
     assert(size);
     if (peer == FI_ADDR_UNSPEC)
         return -EINVAL;
-    return fi_av_lookup(this->av, peer, (void*) out, size);
+    return fi_av_lookup(this->av, peer, (void *) out, size);
 }

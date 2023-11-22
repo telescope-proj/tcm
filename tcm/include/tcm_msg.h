@@ -10,6 +10,7 @@
 #include "tcm_comm.h"
 #include "tcm_util.h"
 #include "tcm_version.h"
+#include "tcm_exception.h"
 
 /* The maximum length of user data exchanged on initial connection */
 
@@ -320,7 +321,8 @@ struct tcm_msg_conn_req_storage {
         tid            = transport_id;
         size_t size    = TCM_MAX_ADDR_LEN;
         if (tcm_serialize_addr(addr_, (void *) addr, &addr_fmt, &size) < 0)
-            throw EINVAL;
+            throw tcm_exception(EINVAL, __FILE__, __LINE__, 
+                                "Invalid address provided");
         addr_len = size;
     }
     size_t get_size() { return sizeof(*this) - TCM_MAX_ADDR_LEN + addr_len; }
@@ -354,7 +356,8 @@ struct tcm_msg_conn_resp_storage {
         size_t size = TCM_MAX_ADDR_LEN;
         int    ret  = tcm_serialize_addr(addr_, addr, &addr_fmt, &size);
         if (ret < 0)
-            throw EINVAL;
+            throw tcm_exception(-ret, __FILE__, __LINE__,
+                                "Address serialization failed");
         addr_len = size;
     }
     size_t get_size() { return sizeof(*this) - TCM_MAX_ADDR_LEN + addr_len; }

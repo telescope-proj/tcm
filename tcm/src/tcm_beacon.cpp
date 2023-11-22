@@ -59,13 +59,14 @@ void tcm_beacon::create_sock(sockaddr * sa) {
     if (sa) {
         sa_size = tcm_internal::get_sa_size(sa);
         if (sa_size <= 0)
-            throw EINVAL;
+            throw tcm_exception(-sa_size, __FILE__, __LINE__,
+                                "Invalid address structure");
     }
 
     this->domain  = sa ? sa->sa_family : AF_INET6;
     tcm_sock sock = socket(domain, SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
     if (!tcm_sock_valid(sock))
-        throw tcm_last_sock_err;
+        throw tcm_exception(tcm_last_sock_err, "Socket data transfer failed");
 
     if (domain == AF_INET6) {
         int flag = 0;
@@ -85,7 +86,8 @@ void tcm_beacon::create_sock(sockaddr * sa) {
             tcm__log_error("Socket bind failed: %s",
                            strerror(tcm_last_sock_err));
             tcm_sock_close(sock);
-            throw tcm_last_sock_err;
+            throw tcm_exception(tcm_last_sock_err, __FILE__, __LINE__,
+                                "Socket data transfer failed");
         }
     }
 
@@ -187,8 +189,8 @@ ssize_t tcm_beacon::send_dgram(sockaddr * peer, void * data, ssize_t len,
     ssize_t ret;
     int     sa_size = tcm_internal::get_sa_size((sockaddr *) ap);
     if (sa_size < 0) {
-        tcm__log_error("Peer address size invalid");
-        throw EINVAL;
+        throw tcm_exception(-sa_size, __FILE__, __LINE__, 
+                            "Invalid address structure");
     }
 
     struct pollfd pfd;

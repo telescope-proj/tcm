@@ -4,6 +4,8 @@
 
 #include "compat/tcmc_net.h"
 #include "tcm_time.h"
+#include "tcm_exception.h"
+
 class tcm_beacon {
     sockaddr_storage sa;
     tcm_sock         sock;

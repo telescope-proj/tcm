@@ -6,7 +6,6 @@
 #define TCM_FABRIC_H_
 
 #include <memory>
-#include <stdexcept>
 #include <stdint.h>
 
 #include <infiniband/ib.h>
@@ -28,6 +27,7 @@
 #include "tcm_msg.h"
 #include "tcm_time.h"
 #include "tcm_util.h"
+#include "tcm_exception.h"
 
 #define TCM_DEFAULT_FABRIC_VERSION FI_VERSION(1, 10)
 
@@ -319,7 +319,8 @@ struct tcm_remote_mem {
         this->raw           = true;
         this->u.raw_key.key = (uint8_t *) calloc(1, rkey_len);
         if (!this->u.raw_key.key)
-            throw ENOMEM;
+            throw tcm_exception(ENOMEM, __FILE__, __LINE__, 
+                                "Allocation of rkey buffer failed");
         memcpy(this->u.raw_key.key, rkey, rkey_len);
         this->u.raw_key.len = rkey_len;
         this->len           = len;
@@ -470,10 +471,10 @@ class tcm_endpoint : public std::enable_shared_from_this<tcm_endpoint> {
     void bind_exit_flag(volatile int * flag);
 
     /* Get the address of the active fabric. */
-    int get_name(void * buf, size_t * buf_size);
+    int get_name(void * buf, size_t * buf_size) noexcept;
 
     /* Set the address of the active fabric. */
-    int set_name(void * buf, size_t buf_size);
+    int set_name(void * buf, size_t buf_size) noexcept;
 
     /* Standard data transfer functions */
     ssize_t send(tcm_mem & mem, fi_addr_t peer, void * ctx, uint64_t offset,

@@ -78,7 +78,8 @@ int tcm_endpoint::init(shared_ptr<tcm_fabric> fab, sockaddr * addr,
     if (addr) {
         info = fi_dupinfo(fab->fi);
         if (!info)
-            throw ENOMEM;
+            throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                                "Fabric info structure duplication failed");
         tcm_free_unset(info->src_addr);
         int sa_size = tcm_internal::get_sa_size(addr);
         if (sa_size < 0) {
@@ -209,7 +210,8 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
     shared_ptr<tcm_cq> icq = make_shared<tcm_cq>(fab, 128);
     int                ret = this->init(fab, addr, timeo, icq, 0);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__,
+                            "Endpoint creation failed");
 }
 
 tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
@@ -217,7 +219,8 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
     this->clear_fields();
     int ret = this->init(fab, addr, timeo, cq_, 0);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__,
+                            "Endpoint creation failed");
 }
 
 tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
@@ -226,10 +229,11 @@ tcm_endpoint::tcm_endpoint(shared_ptr<tcm_fabric> fab, sockaddr * addr,
     this->clear_fields();
     int ret = this->init(fab, addr, timeo, txcq, rxcq);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__,
+                            "Endpoint creation failed");
 }
 
-int tcm_endpoint::get_name(void * buf, size_t * buf_size) {
+int tcm_endpoint::get_name(void * buf, size_t * buf_size) noexcept {
     int ret;
     ret = fi_getname(&this->ep->fid, buf, buf_size);
     if (ret != 0) {
@@ -254,7 +258,7 @@ int tcm_endpoint::get_name(void * buf, size_t * buf_size) {
     return 0;
 }
 
-int tcm_endpoint::set_name(void * buf, size_t buf_size) {
+int tcm_endpoint::set_name(void * buf, size_t buf_size) noexcept {
     tcm__log_debug("Modifying fabric endpoint address buf=%p, size=%lu", buf,
                    buf_size);
     int ret = fi_setname(&this->ep->fid, buf, buf_size);
@@ -282,11 +286,13 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
                                      uint64_t remote_offset, uint64_t len,
                                      void * ctx) {
     if (!mem.check_parent(this->fabric.get())) {
-        tcm__log_error("Invalid memory region used for fabric object");
-        throw EINVAL;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "Attempt to use invalid memory object "
+                            "would result in a program crash");
     }
     if (rmem.raw) {
-        throw ENOTSUP;
+        throw tcm_exception(ENOTSUP, __FILE__, __LINE__,
+                            "TCM does not currently support raw memory keys");
     }
 
     uint64_t rbuf    = rmem.addr + remote_offset;
@@ -294,11 +300,14 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
     uint64_t buf_len = mem.get_len();
     void *   desc    = mem.get_mr_desc();
     if (local_offset + len > buf_len || local_offset > buf_len || len > buf_len)
-        throw EINVAL;
+        throw tcm_exception(
+            EINVAL, __FILE__, __LINE__,
+            "Requested local memory buffer offset out of range");
     if (remote_offset + len > rmem.len || remote_offset > rmem.len ||
         len > rmem.len)
-        throw EINVAL;
-
+        throw tcm_exception(
+            EINVAL, __FILE__, __LINE__,
+            "Requested remote memory buffer offset out of range");
     switch (type) {
         case XFER_RDMA_READ:
             return fi_read(this->ep, buf, len, desc, peer, rbuf, rmem.u.rkey,
@@ -307,7 +316,8 @@ ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
             return fi_write(this->ep, buf, len, desc, peer, rbuf, rmem.u.rkey,
                             ctx);
         default:
-            throw EINVAL;
+            throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                                "Invalid RDMA data transfer type");
     }
 }
 
@@ -315,10 +325,10 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
                                 uint64_t offset, uint64_t len, uint64_t tag,
                                 uint64_t mask, uint8_t sync, void * ctx) {
     if (!mem.check_parent(this->fabric.get())) {
-        tcm__log_error("Invalid memory region used for fabric object");
-        throw EINVAL;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "Attempt to use invalid memory object "
+                            "would result in a program crash");
     }
-
     ssize_t         ret;
     struct timespec dl;
     tcm_get_abs_time(&this->timeout, &dl);
@@ -328,7 +338,9 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
     int      tcat    = 0;
     /* Check individually too in case of overflow */
     if (offset + len > buf_len || offset > buf_len || len > buf_len)
-        throw EINVAL;
+        throw tcm_exception(
+            EINVAL, __FILE__, __LINE__,
+            "Requested local memory buffer offset out of range");
     do {
         if (this->exit_flag && *this->exit_flag > 0) {
             ret = -ECANCELED;
@@ -353,7 +365,8 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
                 tcat = 1;
                 break;
             default:
-                throw EINVAL;
+                throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                                    "Invalid data transfer type");
         }
         if (ret == 0) {
             if (sync)
@@ -388,6 +401,8 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
                 break;
             default:
                 assert(false && "Invalid state!");
+                throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                                    "Invalid system state!");
         }
 
         tcm_time               abst(&dl);

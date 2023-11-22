@@ -55,8 +55,8 @@ int main() {
 
     try {
         beacon = make_shared<tcm_beacon>((sockaddr *) &b_addr);
-    } catch (int e) {
-        printf("System init failed: %s\n", strerror(e));
+    } catch (std::exception & exc) {
+        printf("System init failed: %s\n", exc.what());
         return 1;
     }
 

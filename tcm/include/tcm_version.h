@@ -9,7 +9,7 @@
 
 #define TCM_VERSION_MAJOR 0
 #define TCM_VERSION_MINOR 4
-#define TCM_VERSION_PATCH 5
+#define TCM_VERSION_PATCH 6
 
 #define TCM_MAJOR(x) ((x >> 32) & 0xFFFF)
 #define TCM_MINOR(x) ((x >> 16) & 0xFFFF)

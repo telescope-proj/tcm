@@ -42,7 +42,7 @@ tcm_cq::tcm_cq(std::shared_ptr<tcm_fabric> f, size_t entries) {
     }
 
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__, "CQ creation failed");
 }
 
 size_t tcm_cq::get_cqe_size() {
@@ -131,7 +131,7 @@ std::weak_ptr<tcm_cq> tcm_endpoint::get_rx_cq() { return this->rx_cq; }
 tcm_cq::tcm_cq(std::shared_ptr<tcm_fabric> f, fi_cq_attr & attr) {
     int ret = this->init(f, attr);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__, "CQ creation failed");
 }
 
 tcm_cq::~tcm_cq() {

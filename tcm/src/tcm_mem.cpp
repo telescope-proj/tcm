@@ -44,7 +44,8 @@ tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size) {
     this->clear_fields();
     this->ptr = tcm_mem_align_page(size);
     if (!this->ptr) {
-        throw errno;
+        throw tcm_exception(errno, __FILE__, __LINE__,
+                            "Aligned memory allocation failed");
     }
     this->len    = size;
     this->mode   = TCM_MEM_PLAIN_ALIGNED;
@@ -56,7 +57,8 @@ tcm_mem::tcm_mem(shared_ptr<tcm_fabric> fabric, uint64_t size, uint64_t acs) {
     this->clear_fields();
     this->ptr = tcm_mem_align_page(size);
     if (!this->ptr) {
-        throw errno;
+        throw tcm_exception(errno, __FILE__, __LINE__,
+                            "Aligned memory allocation failed");
     }
     this->len    = size;
     this->mode   = TCM_MEM_PLAIN_ALIGNED;
@@ -149,9 +151,11 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
     tcm__log_trace("Registering MR: %p, len %lu, acs %lu, flags %lu", this->ptr,
                    this->len, acs, flags);
     if (!this->ptr)
-        throw ENOBUFS;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "No buffer was registered by this object");
     if (this->mr)
-        throw EINVAL;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "A MR was already registered by this object");
 
     tcm_free_unset(this->key_buf);
     this->key_size = 0;
@@ -175,8 +179,11 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
             fi_mr_reg(this->parent->top->domain, this->ptr, this->len, acs, 0,
                       rkey_counter, flags, &this->mr, (void *) this);
         if (ret == 0) {
-            /* In order want to support providers with long remote access keys,
-             * 
+            /* In order to support providers with long remote access keys, we
+             * first check if there exists a standard 64-bit key. If not, we
+             * allocate a buffer to store the raw key data. Support for raw
+             * rkeys in TCM is currently incomplete and none of Telescope's
+             * target fabric providers require them.
              */
             uint64_t rkey = fi_mr_key(this->mr);
             if (rkey == FI_KEY_NOTAVAIL) {
@@ -185,24 +192,25 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
                 ret = fi_mr_raw_attr(this->mr, &base, nullptr, &this->key_size,
                                      0);
                 if (ret != -FI_ETOOSMALL) {
-                    tcm__log_trace("Failed to get raw key: %s",
-                                   fi_strerror(-ret));
-                    throw ret;
+                    throw tcm_exception(ret, __FILE__, __LINE__,
+                                        "Failed to get raw rkey data");
                 }
                 if (this->key_size > KEY_SIZE_LIMIT) {
-                    throw ENOBUFS;
+                    throw tcm_exception(
+                        ret, __FILE__, __LINE__,
+                        "Remote key size exceeds available buffer space");
                 }
                 this->key_buf = (uint8_t *) calloc(1, this->key_size);
                 if (!this->key_buf) {
-                    throw ENOMEM;
+                    throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                                        "Remote key buffer allocation failed");
                 }
                 ret = fi_mr_raw_attr(this->mr, &base, this->key_buf,
                                      &this->key_size, 0);
                 if (ret < 0) {
-                    tcm__log_trace("Failed to get raw key: %s",
-                                   fi_strerror(-ret));
                     tcm_free_unset(this->key_buf);
-                    throw ret;
+                    throw tcm_exception(ret, __FILE__, __LINE__,
+                                        "Could not get raw rkey");
                 }
             } else {
                 this->key_buf  = 0;
@@ -212,16 +220,19 @@ void tcm_mem::reg_internal_buffer(uint64_t acs, uint64_t flags) {
         }
         if (ret == -FI_ENOKEY)
             continue;
-        throw tcm_abs(ret);
+        throw tcm_exception(tcm_abs(ret), __FILE__, __LINE__,
+                            "Memory registration failed");
     }
-    throw tcm_abs(ret);
+    throw tcm_exception(tcm_abs(ret), __FILE__, __LINE__,
+                        "Memory registration failed");
 }
 
 void tcm_mem::dereg_internal_buffer() {
     if (this->mr) {
         int ret = fi_close(&this->mr->fid);
         if (ret != 0)
-            throw ret;
+            throw tcm_exception(ret, __FILE__, __LINE__,
+                                "Memory deregistration error");
         this->mr = 0;
     }
     if (this->key_buf) {

@@ -102,13 +102,12 @@ int tcm_fabric::init_fabric_domain(uint32_t version, uint64_t flags,
     this->fabric_version = version;
 
     if (hints->src_addrlen == 0 && hints->dest_addrlen == 0) {
-        tcm__log_error("Invalid fabric hints: No valid address found");
-        throw EINVAL;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__, "Invalid fabric hints");
     }
 
     if (hints->addr_format != FI_SOCKADDR_IN) {
-        tcm__log_error("Invalid address type %d", hints->addr_format);
-        throw EINVAL;
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "Invalid address format");
     }
 
     /* Add the features required by the fabric abstraction, overwriting if
@@ -234,10 +233,11 @@ tcm_fabric::tcm_fabric(tcm_fabric_init_opts & opts) {
     int ret = this->init_fabric_domain(opts.version, opts.flags, opts.hints,
                                        opts.no_getinfo);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__,
+                            "Shared fabric resource init failed");
     ret = this->init(0, opts.timeout);
     if (ret < 0)
-        throw -ret;
+        throw tcm_exception(-ret, __FILE__, __LINE__, "Fabric init failed");
 }
 
 tcm_fabric::~tcm_fabric() {

@@ -3,12 +3,14 @@
 // Copyright (c) 2023 Tim Dettmar
 
 #include "tcm_mm.h"
+#include "tcm_exception.h"
 #include "tcm_util.h"
 
 tcm_managed_mem::tcm_managed_mem(size_t size, size_t alignment) {
     this->ptr = tcm_mem_align(size, alignment);
     if (!this->ptr) {
-        throw ENOMEM;
+        throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                            "Managed memory allocation failed");
     }
     this->alignment = alignment;
     this->size      = size;
@@ -17,7 +19,8 @@ tcm_managed_mem::tcm_managed_mem(size_t size, size_t alignment) {
 tcm_managed_mem::tcm_managed_mem(size_t size) {
     this->ptr = malloc(size);
     if (!this->ptr) {
-        throw ENOMEM;
+        throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                            "Managed memory allocation failed");
     }
     this->alignment = 0;
     this->size      = size;
@@ -70,10 +73,10 @@ void * tcm_mem_align_rdma(size_t size) {
     errno = ENOSYS;
     return NULL;
 #else
-    int    ps  = 0;
-    int    adv = 0;
+    int ps  = 0;
+    int adv = 0;
     if (tcm_can_use_hugepages()) {
-        char * e   = getenv("TCM_PAGE_SIZE");
+        char * e = getenv("TCM_PAGE_SIZE");
         if (e) {
             ps = atoi(e);
             if (!ps)
@@ -87,7 +90,7 @@ void * tcm_mem_align_rdma(size_t size) {
         }
         adv = MADV_HUGEPAGE;
     } else {
-        ps = tcm_get_page_size();
+        ps  = tcm_get_page_size();
         adv = MADV_NOHUGEPAGE;
     }
     void * memptr = tcm_mem_align(size, ps);
@@ -106,7 +109,8 @@ void tcm_mem_free(void * ptr) {
        but tcm_mem_free should always be called to clean up aligned memory
        allocations */
 #if TCM_OS_IS_WINDOWS
-    throw ENOSYS;
+    throw tcm_exception(ENOSYS, __FILE__, __LINE__,
+                        "TCM Windows support is incomplete");
 #else
     free(ptr);
 #endif
