@@ -86,9 +86,13 @@ int tcm_endpoint::init(shared_ptr<tcm_fabric> fab, sockaddr * addr,
             ret = sa_size;
             goto err;
         }
-        info->src_addr = malloc(sizeof(sockaddr_in));
-        memcpy((void *) info->src_addr, addr, sizeof(sockaddr_in));
-        info->src_addrlen = sizeof(sockaddr_in);
+        info->src_addr = malloc(sa_size);
+        if (!info->src_addr) {
+            throw tcm_exception(ENOMEM, __FILE__, __LINE__,
+                                "Source address buffer allocation failed");
+        }
+        memcpy((void *) info->src_addr, addr, sa_size);
+        info->src_addrlen = sa_size;
     } else {
         info = fab->fi;
     }
@@ -128,26 +132,6 @@ int tcm_endpoint::init(shared_ptr<tcm_fabric> fab, sockaddr * addr,
         }
         this->cq    = cq;
         this->rx_cq = cq;
-    }
-
-    if (addr) {
-        ret = fi_setname(&this->ep->fid, addr, sizeof(*addr));
-        if (ret < 0) {
-            tcm__log_error("Failed to set local address: %s",
-                           fi_strerror(tcm_abs(ret)));
-            goto err;
-        }
-        char   host[INET6_ADDRSTRLEN];
-        char   port[6];
-        size_t size    = sizeof(host);
-        int    sa_size = tcm_internal::get_sa_size((sockaddr *) addr);
-        ret            = tcm_internal::ntop(addr, host, port, &size);
-        if (ret == 0) {
-            tcm__log_debug("Set endpoint address (%d): %s:%s", sa_size, host,
-                           port);
-        } else {
-            tcm__log_debug("Could not display address");
-        }
     }
 
     ret = fi_enable(this->ep);
