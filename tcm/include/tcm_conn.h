@@ -2,6 +2,9 @@
 // Telescope Connection Manager
 // Copyright (c) 2023 Tim Dettmar
 
+#ifndef TCM_CONN_H_
+#define TCM_CONN_H_
+
 #include "tcm_errno.h"
 #include "tcm_fabric.h"
 #include "tcm_log.h"
@@ -300,3 +303,5 @@ int tcm_accept_client_dynamic(tcm_accept_client_dynamic_param * p);
  * -ECANCELED or -EINTR.
  */
 int tcm_client_dynamic(tcm_client_dynamic_param * p);
+
+#endif

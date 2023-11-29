@@ -164,7 +164,6 @@ int tcm_endpoint::init(shared_ptr<tcm_fabric> fab, sockaddr * addr,
     }
 
     {
-        tcm__log_debug("len: %d, ret: %d", this->src_addrlen, ret);
         char   host[INET6_ADDRSTRLEN];
         char   port[6];
         size_t size    = sizeof(host);

@@ -2,6 +2,9 @@
 // Telescope Connection Manager
 // Copyright (c) 2023 Tim Dettmar
 
+#ifndef TCM_BEACON_H_
+#define TCM_BEACON_H_
+
 #include "compat/tcmc_net.h"
 #include "tcm_time.h"
 #include "tcm_exception.h"
@@ -44,3 +47,5 @@ class tcm_beacon {
     ssize_t recv_dgram(sockaddr * peer, void * data, ssize_t maxlen,
                        int timeout);
 };
+
+#endif
