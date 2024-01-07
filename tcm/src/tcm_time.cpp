@@ -65,18 +65,24 @@ void tcm_get_abs_time(const tcm_time * tt, timespec * ts) {
         }
         case TCM_TIME_MODE_RELATIVE: {
             struct timespec cur;
-            int             ret = clock_gettime(CLOCK_MONOTONIC, &cur);
-            if (ret < 0) {
-                throw tcm_exception(errno, __FILE__, __LINE__,
-                                    "System clock failure");
+            if (tt->timeout < 0) {
+                ts->tv_sec  = -1;
+                ts->tv_nsec = -1;
+                return;
+            } else {
+                int ret = clock_gettime(CLOCK_MONOTONIC, &cur);
+                if (ret < 0) {
+                    throw tcm_exception(errno, __FILE__, __LINE__,
+                                        "System clock failure");
+                }
+                ts->tv_sec  = cur.tv_sec + tt->timeout / 1000;
+                ts->tv_nsec = cur.tv_nsec + (tt->timeout % 1000) * 1000000;
+                if (ts->tv_nsec > 1000000000) {
+                    ts->tv_sec++;
+                    ts->tv_nsec -= 1000000000;
+                }
+                return;
             }
-            ts->tv_sec  = cur.tv_sec + tt->timeout / 1000;
-            ts->tv_nsec = cur.tv_nsec + (tt->timeout % 1000) * 1000000;
-            if (ts->tv_nsec > 1000000000) {
-                ts->tv_sec++;
-                ts->tv_nsec -= 1000000000;
-            }
-            return;
         }
         case TCM_TIME_MODE_SINGLE: {
             ts->tv_sec  = 0;

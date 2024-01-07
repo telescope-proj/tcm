@@ -107,14 +107,10 @@ ssize_t tcm_cq::poll(void * buf, void * ebuf, size_t entries, size_t * offset,
     ret = fi_cq_read(this->cq, buf, entries);
     if (ret == -FI_EAVAIL && ebuf) {
         for (size_t i = 0; i < entries; i++) {
-            ret = fi_cq_read(this->cq, NULL, 0);
-            if (ret == -FI_EAVAIL) {
-                ret = tcm_get_cq_error(ret, this->cq,
-                                       &((fi_cq_err_entry *) ebuf)[i]);
-                if (ret < 0)
-                    return ret;
+            fi_cq_err_entry * err = ((fi_cq_err_entry *) ebuf) + i;
+            ret                   = fi_cq_readerr(this->cq, err, 0);
+            if (ret == 1)
                 continue;
-            }
             break;
         }
         return -FI_EAVAIL;

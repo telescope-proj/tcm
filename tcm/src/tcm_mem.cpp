@@ -92,6 +92,13 @@ tcm_mem::~tcm_mem() {
     this->parent = 0;
 }
 
+void * tcm_mem::offset(uint64_t offset, uint64_t length) {
+    if (offset + length > this->len)
+        throw tcm_exception(EINVAL, __FILE__, __LINE__,
+                            "Out of bounds memory access");
+    return (uint8_t *) this->ptr + offset;
+}
+
 void * tcm_mem::operator*() { return this->ptr; }
 
 void * tcm_mem::get_ptr() { return this->ptr; }

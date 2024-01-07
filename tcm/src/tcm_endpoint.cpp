@@ -263,6 +263,12 @@ int tcm_endpoint::set_name(void * buf, size_t buf_size) noexcept {
     return 0;
 }
 
+void tcm_endpoint::set_timeout(tcm_time & time) noexcept {
+    this->timeout = time;
+}
+
+const tcm_time & tcm_endpoint::get_timeout() noexcept { return this->timeout; }
+
 ssize_t tcm_endpoint::data_xfer_rdma(uint8_t type, fi_addr_t peer,
                                      tcm_mem & mem, tcm_remote_mem & rmem,
                                      uint64_t local_offset,
@@ -365,7 +371,7 @@ ssize_t tcm_endpoint::data_xfer(uint8_t type, fi_addr_t peer, tcm_mem & mem,
         }
     } while (!tcm_check_deadline(&dl));
 
-    if (sync) {
+    if (sync && !tcm_check_deadline(&dl)) {
         if (this->exit_flag && *this->exit_flag > 0) {
             ret = -ECANCELED;
             return ret;

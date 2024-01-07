@@ -22,12 +22,12 @@
 #endif
 
 #include "tcm_beacon.h"
+#include "tcm_exception.h"
 #include "tcm_log.h"
 #include "tcm_mm.h"
 #include "tcm_msg.h"
 #include "tcm_time.h"
 #include "tcm_util.h"
-#include "tcm_exception.h"
 
 #define TCM_DEFAULT_FABRIC_VERSION FI_VERSION(1, 10)
 
@@ -183,6 +183,17 @@ class tcm_mem {
     ~tcm_mem();
 
     /**
+     * @brief Pointer arithmetic with bounds checking.
+     *
+     * @param offset Offset in bytes.
+     * 
+     * @param length Optional length parameter. This parameter can be used to
+     * verify that the entire subregion fits within the allocated memory region.
+     *
+     * @return void*
+     */
+    void *   offset(uint64_t offset, uint64_t length = 0);
+    /**
      * @brief Get the pointer to the start of the raw buffer.
      *
      * @return void*
@@ -319,7 +330,7 @@ struct tcm_remote_mem {
         this->raw           = true;
         this->u.raw_key.key = (uint8_t *) calloc(1, rkey_len);
         if (!this->u.raw_key.key)
-            throw tcm_exception(ENOMEM, __FILE__, __LINE__, 
+            throw tcm_exception(ENOMEM, __FILE__, __LINE__,
                                 "Allocation of rkey buffer failed");
         memcpy(this->u.raw_key.key, rkey, rkey_len);
         this->u.raw_key.len = rkey_len;
@@ -475,6 +486,11 @@ class tcm_endpoint : public std::enable_shared_from_this<tcm_endpoint> {
 
     /* Set the address of the active fabric. */
     int set_name(void * buf, size_t buf_size) noexcept;
+
+    /* Set the timeout for synchronous functions. */
+    void set_timeout(tcm_time & time) noexcept;
+
+    const tcm_time & get_timeout() noexcept;
 
     /* Standard data transfer functions */
     ssize_t send(tcm_mem & mem, fi_addr_t peer, void * ctx, uint64_t offset,

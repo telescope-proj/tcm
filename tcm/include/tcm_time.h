@@ -51,22 +51,27 @@ struct tcm_time {
         this->interval = interval_us;
     }
 
-    /* Absolute deadline */
     tcm_time(struct timespec * deadline) {
-        this->mode = TCM_TIME_MODE_ABSOLUTE;
-        this->ts   = *deadline;
+        if (deadline->tv_sec == -1) {
+            this->mode     = TCM_TIME_MODE_RELATIVE;
+            this->timeout  = -1;
+            this->interval = 0;
+        } else {
+            this->mode = TCM_TIME_MODE_ABSOLUTE;
+            this->ts   = *deadline;
+        }
     }
 
     void unset() {
-        this->mode = TCM_TIME_MODE_INVALID;
-        this->timeout = 0;
-        this->interval = 0;
-        this->ts.tv_sec = 0;
+        this->mode       = TCM_TIME_MODE_INVALID;
+        this->timeout    = 0;
+        this->interval   = 0;
+        this->ts.tv_sec  = 0;
         this->ts.tv_nsec = 0;
     }
 };
 
-#define TCM_TIME_NULL ((tcm_time*) nullptr)
+#define TCM_TIME_NULL ((tcm_time *) nullptr)
 
 int64_t tcm_time_sleep(tcm_time * t, bool interruptable);
 void    tcm_get_abs_time(const tcm_time * tt, timespec * ts);
@@ -106,6 +111,8 @@ static inline int tcm_check_deadline(const timespec * ts) {
     /* Special value for single poll */
     if (ts->tv_sec == 0 && ts->tv_nsec == 0)
         return 1;
+    if (ts->tv_sec == -1)
+        return 0;
 
     struct timespec now;
     int             ret = clock_gettime(CLOCK_MONOTONIC, &now);
